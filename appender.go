@@ -1,6 +1,7 @@
 package duckdb
 
 /*
+// Standard includes
 #include <stdlib.h>
 #include <duckdb.h>
 

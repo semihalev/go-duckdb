@@ -1,6 +1,7 @@
 package duckdb
 
 /*
+// Standard includes
 #include <duckdb.h>
 
 #ifndef DUCKDB_VERSION_MAJOR

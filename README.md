@@ -21,17 +21,23 @@ A zero-allocation, high-performance, zero-dependency SQL driver for DuckDB in Go
 ## Requirements
 
 - Go 1.23 or higher
-- DuckDB C library installed on your system
+- No external dependencies! The DuckDB library is included in the project for all major platforms:
 
 ## Installation
 
-First, ensure you have the DuckDB C library installed on your system.
-
-Then install the Go driver:
+Simply install the Go driver:
 
 ```bash
 go get github.com/semihalev/go-duckdb
 ```
+
+No need to install DuckDB separately! The driver includes pre-compiled static libraries for:
+
+- Linux (amd64, arm64)
+- macOS (amd64, arm64)
+- Windows (amd64)
+
+The driver automatically uses the appropriate static library for your platform.
 
 ## Usage
 

@@ -12,7 +12,15 @@ import (
 )
 
 /*
-#cgo LDFLAGS: -lduckdb
+// Platform-specific linker flags to use the embedded static library
+#cgo linux,amd64 LDFLAGS: -L${SRCDIR}/lib/linux/amd64 -lduckdb -lm -lpthread -lstdc++
+#cgo linux,arm64 LDFLAGS: -L${SRCDIR}/lib/linux/arm64 -lduckdb -lm -lpthread -lstdc++
+#cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/lib/darwin/amd64 -lduckdb -lm -lpthread -lstdc++
+#cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/lib/darwin/arm64 -lduckdb -lm -lpthread -lstdc++
+#cgo windows,amd64 LDFLAGS: -L${SRCDIR}/lib/windows/amd64 -lduckdb
+// Include paths for the embedded headers
+#cgo CFLAGS: -I${SRCDIR}/include
+// Standard includes
 #include <stdlib.h>
 #include <duckdb.h>
 
