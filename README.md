@@ -14,9 +14,19 @@ A zero-allocation, high-performance, zero-dependency SQL driver for DuckDB in Go
 - Zero Go dependencies
 - Follows database/sql interfaces
 - Full support for DuckDB types
-- Prepared statements with context support
 - Transactions with proper isolation
 - Context cancellation throughout API
+
+## DuckDB 1.2.1 Compatibility
+
+This driver is compatible with DuckDB 1.2.1. However, there are some limitations:
+
+1. **Prepared statements** don't work correctly with parameter binding in 1.2.1 
+   and are currently disabled (direct query execution is used instead)
+2. **BLOB handling** is simplified
+3. **Named parameters** are not yet supported
+
+These limitations will be addressed in future versions.
 
 ## Requirements
 
