@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"sync"
 )
 
@@ -12,7 +13,18 @@ var driverSingleton sync.Once
 
 func init() {
 	driverSingleton.Do(func() {
-		sql.Register("duckdb", &Driver{})
+		duckDBVersion := GetDuckDBVersion()
+		driver := &Driver{}
+		
+		// Log DuckDB version for debugging - use a simple println since we don't have dependencies
+		fmt.Printf("go-duckdb: DuckDB version %s detected\n", duckDBVersion)
+		
+		// Compatibility check - warn if older than 1.2.0
+		if !duckDBVersion.IsAtLeast120() {
+			fmt.Printf("WARNING: go-duckdb: This driver is optimized for DuckDB 1.2.0+, but detected version %s\n", duckDBVersion)
+		}
+		
+		sql.Register("duckdb", driver)
 	})
 }
 

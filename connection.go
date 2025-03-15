@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,25 @@ import (
 #cgo LDFLAGS: -lduckdb
 #include <stdlib.h>
 #include <duckdb.h>
+
+// Version detection - for compatibility with DuckDB v1.2.0
+#ifndef DUCKDB_VERSION_MAJOR
+#define DUCKDB_VERSION_MAJOR 0
+#endif
+
+#ifndef DUCKDB_VERSION_MINOR
+#define DUCKDB_VERSION_MINOR 0
+#endif
+
+#ifndef DUCKDB_VERSION_PATCH
+#define DUCKDB_VERSION_PATCH 0
+#endif
+
+// Check if DuckDB version is at least 1.2.0
+static inline int duckdb_version_at_least_1_2_0() {
+    return (DUCKDB_VERSION_MAJOR > 1) || 
+           (DUCKDB_VERSION_MAJOR == 1 && DUCKDB_VERSION_MINOR >= 2);
+}
 */
 import "C"
 
@@ -34,11 +54,13 @@ func newConnection(dsn string) (*conn, error) {
 	var db *C.duckdb_database
 	var conn *C.duckdb_connection
 
+	// Open the database
 	if rc := C.duckdb_open(cdsn, &db); rc != C.DuckDBSuccess {
 		err := errors.New("failed to open database")
 		return nil, err
 	}
 
+	// Connect to the database
 	if rc := C.duckdb_connect(db, &conn); rc != C.DuckDBSuccess {
 		C.duckdb_close(&db)
 		err := errors.New("failed to connect to database")
@@ -49,6 +71,29 @@ func newConnection(dsn string) (*conn, error) {
 	c := &conn{
 		db:   db,
 		conn: conn,
+	}
+	
+	// Apply configuration specific to DuckDB 1.2.0+
+	version := GetDuckDBVersion()
+	if version.IsAtLeast120() {
+		// In DuckDB 1.2.0+, set default settings for better compatibility and performance
+		execSettings := []struct {
+			setting string
+			value   string
+		}{
+			// Enable standard compliant NULL handling for better SQL compatibility
+			{"sql_standard_null_handling", "true"},
+			// Ensure proper preserving of inserted timestamps
+			{"preserve_insertion_order", "true"},
+		}
+		
+		for _, setting := range execSettings {
+			query := fmt.Sprintf("SET %s=%s", setting.setting, setting.value)
+			cQuery := C.CString(query)
+			var result *C.duckdb_result
+			C.duckdb_query(conn, cQuery, result)
+			C.free(unsafe.Pointer(cQuery))
+		}
 	}
 	
 	return c, nil
