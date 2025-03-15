@@ -132,10 +132,20 @@ func (c *conn) prepare(query string) (*stmt, error) {
 		return nil, err
 	}
 
-	return &stmt{
-		conn: c,
-		stmt: s,
-	}, nil
+	statement := &stmt{
+		conn:      c,
+		stmt:      s,
+		paramMap:  make(map[string]int),
+	}
+	
+	// Initialize paramCount
+	statement.paramCount = int(C.duckdb_nparams(s))
+	
+	// Try to extract named parameters if any
+	// We need to parse the query string ourselves since DuckDB C API doesn't expose parameter names
+	statement.extractNamedParams(query)
+	
+	return statement, nil
 }
 
 func (c *conn) Close() error {
@@ -157,6 +167,8 @@ func (c *conn) Begin() (driver.Tx, error) {
 	return c.BeginTx(context.Background(), driver.TxOptions{})
 }
 
+// BeginTx starts a new transaction with the given context and options.
+// It implements the driver.ConnBeginTx interface.
 func (c *conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
 	if c.closed.Load() {
 		return nil, driver.ErrBadConn
@@ -193,6 +205,7 @@ func (c *conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, e
 
 // ExecContext implements the driver.ExecerContext interface.
 // This allows the driver to execute queries directly without preparing a statement.
+// It also supports named parameters through the NamedValueChecker interface.
 func (c *conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	if c.closed.Load() {
 		return nil, driver.ErrBadConn
@@ -254,6 +267,7 @@ func namedValueToValue[T driver.NamedValue, U driver.Value](named []T) ([]U, err
 
 // QueryContext implements the driver.QueryerContext interface.
 // This allows the driver to execute queries directly without preparing a statement.
+// It also supports named parameters through the NamedValueChecker interface.
 func (c *conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	if c.closed.Load() {
 		return nil, driver.ErrBadConn

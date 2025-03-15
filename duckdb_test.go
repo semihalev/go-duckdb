@@ -3,6 +3,7 @@ package duckdb
 import (
 	"context"
 	"database/sql"
+	"math"
 	"testing"
 	"time"
 )
@@ -361,6 +362,121 @@ func TestExecerContext(t *testing.T) {
 
 	if count != 2 {
 		t.Fatalf("expected 2 rows, got %d", count)
+	}
+}
+
+func TestNamedParameters(t *testing.T) {
+	db, err := sql.Open("duckdb", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create a table
+	_, err = db.Exec(`CREATE TABLE named_params_test (id INTEGER, name VARCHAR, value DOUBLE)`)
+	if err != nil {
+		t.Fatalf("failed to create table: %v", err)
+	}
+
+	// Test with named parameters using :name syntax
+	result, err := db.Exec(`INSERT INTO named_params_test (id, name, value) VALUES (:id, :name, :value)`, 
+		sql.Named("id", 1), 
+		sql.Named("name", "Test 1"), 
+		sql.Named("value", 3.14))
+	if err != nil {
+		t.Fatalf("failed to insert with named parameters: %v", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		t.Fatalf("failed to get rows affected: %v", err)
+	}
+
+	if rowsAffected != 1 {
+		t.Fatalf("expected 1 row affected, got %d", rowsAffected)
+	}
+
+	// Test with named parameters using $name syntax
+	_, err = db.Exec(`INSERT INTO named_params_test (id, name, value) VALUES ($id, $name, $value)`, 
+		sql.Named("id", 2), 
+		sql.Named("name", "Test 2"), 
+		sql.Named("value", 2.71))
+	if err != nil {
+		t.Fatalf("failed to insert with $name parameters: %v", err)
+	}
+
+	// Test mixing positional and named parameters - this should fail
+	_, err = db.Exec(`INSERT INTO named_params_test (id, name, value) VALUES (?, :name, ?)`, 
+		3, 
+		sql.Named("name", "Test 3"), 
+		5.55)
+	if err == nil {
+		t.Fatal("expected error when mixing positional and named parameters, but got nil")
+	}
+
+	// Test query with named parameters
+	var id int
+	var name string
+	var value float64
+
+	err = db.QueryRow(`SELECT id, name, value FROM named_params_test WHERE id = :id`, sql.Named("id", 1)).Scan(&id, &name, &value)
+	if err != nil {
+		t.Fatalf("failed to query with named parameters: %v", err)
+	}
+
+	if id != 1 || name != "Test 1" || math.Abs(value-3.14) > 0.001 {
+		t.Fatalf("unexpected result: id=%d, name=%s, value=%f", id, name, value)
+	}
+
+	// Test prepared statement with named parameters
+	stmt, err := db.Prepare(`SELECT id, name, value FROM named_params_test WHERE id = :id`)
+	if err != nil {
+		t.Fatalf("failed to prepare statement: %v", err)
+	}
+	defer stmt.Close()
+
+	err = stmt.QueryRow(sql.Named("id", 2)).Scan(&id, &name, &value)
+	if err != nil {
+		t.Fatalf("failed to query with prepared statement: %v", err)
+	}
+
+	if id != 2 || name != "Test 2" || math.Abs(value-2.71) > 0.001 {
+		t.Fatalf("unexpected result from prepared statement: id=%d, name=%s, value=%f", id, name, value)
+	}
+
+	// Test with missing parameter
+	_, err = db.Exec(`INSERT INTO named_params_test (id, name, value) VALUES (:id, :name, :unknown)`, 
+		sql.Named("id", 3), 
+		sql.Named("name", "Test 3"))
+	if err == nil {
+		t.Fatal("expected error for missing parameter, but got nil")
+	}
+
+	// Reuse named parameters (same name multiple times in query)
+	result, err = db.Exec(`INSERT INTO named_params_test (id, name, value) VALUES (:id, :name, :id)`, 
+		sql.Named("id", 3), 
+		sql.Named("name", "Test 3"))
+	if err != nil {
+		t.Fatalf("failed to reuse named parameters: %v", err)
+	}
+
+	rowsAffected, err = result.RowsAffected()
+	if err != nil {
+		t.Fatalf("failed to get rows affected: %v", err)
+	}
+
+	if rowsAffected != 1 {
+		t.Fatalf("expected 1 row affected, got %d", rowsAffected)
+	}
+
+	// Verify the data with reused parameters
+	err = db.QueryRow(`SELECT id, name, value FROM named_params_test WHERE id = ?`, 3).Scan(&id, &name, &value)
+	if err != nil {
+		t.Fatalf("failed to query reused parameters data: %v", err)
+	}
+
+	if id != 3 || name != "Test 3" || math.Abs(value-3.0) > 0.001 {
+		t.Fatalf("unexpected result for reused parameters: id=%d, name=%s, value=%f", id, name, value)
 	}
 }
 

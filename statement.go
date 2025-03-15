@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,6 +22,7 @@ import (
 import "C"
 
 // stmt implements database/sql/driver.Stmt interface.
+// It also implements driver.NamedValueChecker for named parameter support.
 type stmt struct {
 	conn *conn
 	stmt *C.duckdb_prepared_statement
@@ -28,6 +31,11 @@ type stmt struct {
 	result   *C.duckdb_result
 	closed   atomic.Bool
 	mu       sync.RWMutex
+	
+	// paramMap maps parameter names to positions (1-indexed)
+	paramMap map[string]int
+	// paramCount is the total number of parameters
+	paramCount int
 }
 
 func (s *stmt) Close() error {
@@ -51,7 +59,15 @@ func (s *stmt) Close() error {
 func (s *stmt) NumInput() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return int(C.duckdb_nparams(s.stmt))
+	
+	// If we've already counted the parameters, return the cached count
+	if s.paramCount > 0 {
+		return s.paramCount
+	}
+	
+	// Get the parameter count from DuckDB
+	s.paramCount = int(C.duckdb_nparams(s.stmt))
+	return s.paramCount
 }
 
 func (s *stmt) Exec(args []driver.Value) (driver.Result, error) {
@@ -205,3 +221,126 @@ func (r *result_) RowsAffected() (int64, error) {
 }
 
 // See rows.go for the implementation of the rows type
+
+// extractNamedParams parses the query string for named parameters
+// and builds a map from parameter names to their positions
+func (s *stmt) extractNamedParams(query string) {
+	// We need to parse named parameters in the format :name or $name
+	// DuckDB supports both : and $ prefixes for named parameters
+	
+	// Convert to lowercase if needed for case-insensitive matching
+	// Note: DuckDB parameter names are case-insensitive
+	
+	// Scan the query for named parameters
+	// This is a simplified parsing - we're not handling all edge cases like quoted parameters
+	var inString bool
+	var stringChar rune
+	var inComment bool
+	var inMultilineComment bool
+	
+	paramPosition := 0 // Current parameter position (1-indexed)
+	
+	for i, char := range query {
+		// Skip characters inside strings
+		if inString {
+			if char == stringChar && i > 0 && query[i-1] != '\\' {
+				inString = false
+			}
+			continue
+		}
+		
+		// Check for string start
+		if char == '\'' || char == '"' {
+			inString = true
+			stringChar = char
+			continue
+		}
+		
+		// Skip comments
+		if inComment {
+			if char == '\n' {
+				inComment = false
+			}
+			continue
+		}
+		
+		if inMultilineComment {
+			if char == '/' && i > 0 && query[i-1] == '*' {
+				inMultilineComment = false
+			}
+			continue
+		}
+		
+		// Check for comment start
+		if char == '-' && i+1 < len(query) && query[i+1] == '-' {
+			inComment = true
+			continue
+		}
+		
+		if char == '/' && i+1 < len(query) && query[i+1] == '*' {
+			inMultilineComment = true
+			continue
+		}
+		
+		// Check for parameter markers
+		if char == '?' {
+			// Positional parameter
+			paramPosition++
+			continue
+		}
+		
+		// Look for named parameters (:name or $name)
+		if (char == ':' || char == '$') && i+1 < len(query) {
+			// Found potential named parameter start
+			// Extract the parameter name
+			start := i + 1
+			end := start
+			
+			// Find the end of the parameter name
+			for end < len(query) {
+				c := query[end]
+				if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || 
+					 (c >= '0' && c <= '9' && end > start) || // Numbers allowed after first char
+					 c == '_') {
+					break
+				}
+				end++
+			}
+			
+			// If we found a name
+			if end > start {
+				paramName := query[start:end]
+				// Parameter names in DuckDB are case-insensitive
+				paramName = strings.ToLower(paramName)
+				
+				// Check if this is the first time we've seen this parameter
+				if _, exists := s.paramMap[paramName]; !exists {
+					paramPosition++
+					s.paramMap[paramName] = paramPosition
+				}
+			}
+		}
+	}
+}
+
+// CheckNamedValue implements the driver.NamedValueChecker interface.
+// It supports named parameters with :name or $name syntax.
+func (s *stmt) CheckNamedValue(nv *driver.NamedValue) error {
+	// If it's an ordinal parameter, we don't need to do anything
+	if nv.Name == "" {
+		return nil
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	
+	// Check if the parameter name exists in our map
+	position, ok := s.paramMap[strings.ToLower(nv.Name)]
+	if !ok {
+		return fmt.Errorf("parameter %s not found in statement", nv.Name)
+	}
+	
+	// Update the ordinal position based on the parameter name
+	nv.Ordinal = position
+	return nil
+}
