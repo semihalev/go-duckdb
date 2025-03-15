@@ -2,6 +2,7 @@ package duckdb
 
 /*
 // Standard includes
+#include <stdio.h>
 #include <duckdb.h>
 
 #ifndef DUCKDB_VERSION_MAJOR
@@ -71,6 +72,11 @@ func (v Version) AtLeast(major, minor, patch int) bool {
 // IsAtLeast120 returns true if the version is at least 1.2.0
 func (v Version) IsAtLeast120() bool {
 	return v.AtLeast(1, 2, 0)
+}
+
+// IsAtLeast121 returns true if the version is at least 1.2.1
+func (v Version) IsAtLeast121() bool {
+	return v.AtLeast(1, 2, 1)
 }
 
 // GetDuckDBVersion returns the version of the linked DuckDB library

@@ -1,6 +1,6 @@
 # DuckDB Headers
 
-This directory contains header files for DuckDB v1.2.0 required for compiling the Go driver.
+This directory contains header files for DuckDB v1.2.1 required for compiling the Go driver.
 
 ## Files
 
@@ -18,7 +18,7 @@ To update the headers for a new version of DuckDB:
 
 2. Checkout the desired version:
    ```
-   git checkout v1.2.0
+   git checkout v1.2.1
    ```
 
 3. Copy the header files:
@@ -28,4 +28,4 @@ To update the headers for a new version of DuckDB:
 
 ## Version Compatibility
 
-The current headers are compatible with DuckDB v1.2.0. If you update to a newer version, make sure to update the static libraries as well to match the version.
+The current headers are compatible with DuckDB v1.2.1. If you update to a newer version, make sure to update the static libraries as well to match the version.

@@ -22,9 +22,10 @@ import (
 #cgo CFLAGS: -I${SRCDIR}/include
 // Standard includes
 #include <stdlib.h>
+#include <string.h>
 #include <duckdb.h>
 
-// Version detection - for compatibility with DuckDB v1.2.0
+// Version detection - for compatibility with DuckDB v1.2.x
 #ifndef DUCKDB_VERSION_MAJOR
 #define DUCKDB_VERSION_MAJOR 0
 #endif
@@ -36,6 +37,40 @@ import (
 #ifndef DUCKDB_VERSION_PATCH
 #define DUCKDB_VERSION_PATCH 0
 #endif
+
+// Get the last error from a connection - DuckDB 1.2.1 dropped this function
+static char* duckdb_connection_error(duckdb_connection conn) {
+    // Create a query to get the last error
+    duckdb_result result;
+    duckdb_state state = duckdb_query(conn, "SELECT last_error()", &result);
+    
+    char* error_msg;
+    // Copy a default error message
+    error_msg = (char*)malloc(14); // "Unknown error\0"
+    strcpy(error_msg, "Unknown error");
+    
+    // Only try to extract value if query was successful
+    if (state == DuckDBSuccess && 
+        duckdb_column_count(&result) > 0 && 
+        duckdb_row_count(&result) > 0 &&
+        !duckdb_value_is_null(&result, 0, 0)) {
+        
+        // Get the error string and copy it
+        const char* val = duckdb_value_varchar(&result, 0, 0);
+        if (val) {
+            // Free the previous allocation
+            free(error_msg);
+            // Allocate and copy the new one
+            error_msg = (char*)malloc(strlen(val) + 1);
+            strcpy(error_msg, val);
+            // Free the varchar result
+            duckdb_free((void*)val);
+        }
+    }
+    
+    duckdb_destroy_result(&result);
+    return error_msg;
+}
 
 // Check if DuckDB version is at least 1.2.0
 static inline int duckdb_version_at_least_1_2_0() {

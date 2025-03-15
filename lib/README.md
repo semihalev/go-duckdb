@@ -1,6 +1,6 @@
 # DuckDB Pre-compiled Libraries
 
-This directory contains pre-compiled static libraries for DuckDB v1.2.0 for various platforms.
+This directory contains pre-compiled static libraries for DuckDB v1.2.1 for various platforms.
 
 ## Directory Structure
 
@@ -39,9 +39,9 @@ To build your own DuckDB static libraries:
    cd duckdb
    ```
 
-2. Checkout the desired version (v1.2.0):
+2. Checkout the desired version (v1.2.1):
    ```
-   git checkout v1.2.0
+   git checkout v1.2.1
    ```
 
 3. Configure with CMake for static library:
