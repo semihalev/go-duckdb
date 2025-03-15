@@ -12,13 +12,25 @@ This document tracks the tasks needed to make the go-duckdb driver fully compati
 
 ## Tasks
 
-- [ ] Investigate and fix parameter binding issues with prepared statements
+- [x] Fix boolean parameter binding and result handling
+  - [x] Implement proper boolean binding in prepared statements
+  - [x] Fix boolean handling in result sets
+  - [ ] Add comprehensive tests for boolean parameters and results
+
+- [ ] Optimize query result memory usage
+  - [x] Implement enhanced string interning with byte buffer reuse
+  - [x] Add optimized C string conversion with minimal allocations
+  - [ ] Add buffer pooling for result sets to further reduce allocations
+  - [ ] Implement periodic StringCache cleanup to prevent memory leaks
+
+- [ ] Investigate and fix remaining parameter binding issues with prepared statements
   - [ ] Add tests to verify parameter binding is working correctly
   - [ ] Consider implementing a workaround by rewriting queries and direct execution
 
 - [ ] Enhance BLOB handling
   - [ ] Implement zero-copy BLOB transfers where possible
   - [ ] Add proper length tracking for BLOB data
+  - [ ] Add BLOB buffer pooling
 
 - [ ] Add support for named parameters
   - [ ] Implement parameter name resolution

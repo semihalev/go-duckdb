@@ -360,6 +360,172 @@ func TestQueryContext(t *testing.T) {
 	}
 }
 
+func TestBooleanHandling(t *testing.T) {
+	db, err := sql.Open("duckdb", ":memory:")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Test boolean results
+	t.Run("BooleanResults", func(t *testing.T) {
+		rows, err := db.Query("SELECT true as t, false as f")
+		if err != nil {
+			t.Fatalf("Failed to execute boolean query: %v", err)
+		}
+		defer rows.Close()
+
+		if !rows.Next() {
+			t.Fatal("Expected one row, got none")
+		}
+
+		var trueVal, falseVal bool
+		if err := rows.Scan(&trueVal, &falseVal); err != nil {
+			t.Fatalf("Failed to scan boolean values: %v", err)
+		}
+
+		if !trueVal {
+			t.Errorf("Expected true, got false")
+		}
+
+		if falseVal {
+			t.Errorf("Expected false, got true")
+		}
+	})
+
+	// Test boolean parameters
+	t.Run("BooleanParameters", func(t *testing.T) {
+		// Create a table with a boolean column
+		_, err := db.Exec("CREATE TABLE bool_test (id INTEGER, flag BOOLEAN)")
+		if err != nil {
+			t.Fatalf("Failed to create table: %v", err)
+		}
+
+		// Prepare a statement with boolean parameter
+		stmt, err := db.Prepare("INSERT INTO bool_test VALUES (?, ?)")
+		if err != nil {
+			t.Fatalf("Failed to prepare statement: %v", err)
+		}
+		defer stmt.Close()
+
+		// Insert rows with boolean parameters
+		for i, val := range []bool{true, false, true, false, true} {
+			_, err := stmt.Exec(i, val)
+			if err != nil {
+				t.Fatalf("Failed to insert row with boolean parameter: %v", err)
+			}
+		}
+
+		// Query for true values
+		rows, err := db.Query("SELECT id FROM bool_test WHERE flag = true ORDER BY id")
+		if err != nil {
+			t.Fatalf("Failed to query boolean column: %v", err)
+		}
+		defer rows.Close()
+
+		// Verify results
+		var ids []int
+		for rows.Next() {
+			var id int
+			if err := rows.Scan(&id); err != nil {
+				t.Fatalf("Failed to scan id: %v", err)
+			}
+			ids = append(ids, id)
+		}
+
+		// Should get id 0, 2, 4 (true values)
+		expectedIDs := []int{0, 2, 4}
+		if len(ids) != len(expectedIDs) {
+			t.Errorf("Expected %d rows, got %d", len(expectedIDs), len(ids))
+		}
+
+		for i, id := range ids {
+			if i >= len(expectedIDs) || id != expectedIDs[i] {
+				t.Errorf("Expected id %d at position %d, got %d", expectedIDs[i], i, id)
+			}
+		}
+	})
+
+	// Test prepared statement with boolean parameter
+	t.Run("PreparedBooleanParameter", func(t *testing.T) {
+		// Create a test table
+		_, err := db.Exec("CREATE TABLE bool_filter (id INTEGER, name VARCHAR)")
+		if err != nil {
+			t.Fatalf("Failed to create table: %v", err)
+		}
+
+		// Insert some test data
+		_, err = db.Exec(`
+			INSERT INTO bool_filter VALUES 
+			(1, 'one'),
+			(2, 'two'),
+			(3, 'three'),
+			(4, 'four'),
+			(5, 'five')
+		`)
+		if err != nil {
+			t.Fatalf("Failed to insert data: %v", err)
+		}
+
+		// Prepare a statement with a boolean parameter in the WHERE clause
+		stmt, err := db.Prepare("SELECT id, name FROM bool_filter WHERE ? OR id > 3")
+		if err != nil {
+			t.Fatalf("Failed to prepare statement: %v", err)
+		}
+		defer stmt.Close()
+
+		// Test with true parameter - should return all rows
+		t.Run("TrueCondition", func(t *testing.T) {
+			rows, err := stmt.Query(true)
+			if err != nil {
+				t.Fatalf("Failed to execute query with true param: %v", err)
+			}
+			defer rows.Close()
+
+			count := 0
+			for rows.Next() {
+				count++
+			}
+
+			if count != 5 {
+				t.Errorf("Expected 5 rows with true condition, got %d", count)
+			}
+		})
+
+		// Test with false parameter - should return only id > 3
+		t.Run("FalseCondition", func(t *testing.T) {
+			rows, err := stmt.Query(false)
+			if err != nil {
+				t.Fatalf("Failed to execute query with false param: %v", err)
+			}
+			defer rows.Close()
+
+			count := 0
+			ids := make([]int, 0)
+			for rows.Next() {
+				var id int
+				var name string
+				if err := rows.Scan(&id, &name); err != nil {
+					t.Fatalf("Failed to scan row: %v", err)
+				}
+				count++
+				ids = append(ids, id)
+			}
+
+			if count != 2 {
+				t.Errorf("Expected 2 rows with false condition, got %d", count)
+			}
+
+			// Should only have ids 4 and 5
+			for _, id := range ids {
+				if id <= 3 {
+					t.Errorf("Expected only ids > 3, got %d", id)
+				}
+			}
+		})
+	})
+}
+
 func TestAppender(t *testing.T) {
 	// Skip this test for now until we fix the appender implementation
 	t.Skip("Skipping appender test until fully implemented")

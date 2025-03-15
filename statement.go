@@ -175,8 +175,11 @@ func bindParameters(stmt *C.duckdb_prepared_statement, args []driver.NamedValue)
 		// Bind based on type
 		switch v := arg.Value.(type) {
 		case bool:
-			return fmt.Errorf("boolean parameters not yet supported")
-			// TODO: Fix boolean parameters
+			// Use int8_t for boolean binding since C bool is challenging with CGo
+			// DuckDB API will treat non-zero as true and zero as false
+			if err := C.duckdb_bind_int8(*stmt, idx, boolToInt8(v)); err == C.DuckDBError {
+				return fmt.Errorf("failed to bind boolean parameter at index %d", i)
+			}
 
 		case int, int8, int16, int32:
 			val := reflect.ValueOf(v).Int()

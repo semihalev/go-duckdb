@@ -38,6 +38,23 @@ func goString(s *C.char) string {
 	return C.GoString(s)
 }
 
+// Convert Go bool to int8 for use with DuckDB C API
+func boolToInt8(b bool) C.int8_t {
+	if b {
+		return C.int8_t(1)
+	}
+	return C.int8_t(0)
+}
+
+// Convert DuckDB C API bool result to Go bool
+func cBoolToGo(b C.bool) bool {
+	// Use unsafe pointer to reinterpret without direct conversion
+	// Since Go can't directly convert between C bool and Go bool
+	ptr := unsafe.Pointer(&b)
+	// Any non-zero value is considered true
+	return *(*C.char)(ptr) != 0
+}
+
 // Driver implements the database/sql/driver.Driver interface.
 type Driver struct{}
 
