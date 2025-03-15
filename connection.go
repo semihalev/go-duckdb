@@ -206,42 +206,49 @@ func (c *Connection) QueryContext(ctx context.Context, query string, args []driv
 	cQuery := cString(query)
 	defer freeString(cQuery)
 
+	// Get a result set wrapper from the pool
+	// The wrapper comes pre-allocated and ready to use
+	wrapper := globalBufferPool.GetResultSetWrapper()
+
 	// Check if we have parameters - if so, use prepared statement
 	if len(args) > 0 {
 		// Use a prepared statement
 		var stmt C.duckdb_prepared_statement
 		if err := C.duckdb_prepare(*c.conn, cQuery, &stmt); err == C.DuckDBError {
+			globalBufferPool.PutResultSetWrapper(wrapper) // Return wrapper to pool
 			return nil, fmt.Errorf("failed to prepare statement: %s", goString(C.duckdb_prepare_error(stmt)))
 		}
-		// Note: we don't defer destroy here as the statement will be closed when the rows are closed
 
-		// Bind parameters
-		//if err := bindParameters(&stmt, args); err != nil {
-		//	C.duckdb_destroy_prepare(&stmt)
-		//	return nil, err
-		//}
-
-		// Execute statement
-		var result C.duckdb_result
-		if err := C.duckdb_execute_prepared(stmt, &result); err == C.DuckDBError {
+		// Execute statement with pooled result - pass by address since it's a struct now
+		if err := C.duckdb_execute_prepared(stmt, &wrapper.result); err == C.DuckDBError {
 			C.duckdb_destroy_prepare(&stmt)
-			return nil, fmt.Errorf("failed to execute statement: %s", goString(C.duckdb_result_error(&result)))
+			
+			// Get error message before returning wrapper to pool
+			errorMsg := goString(C.duckdb_result_error(&wrapper.result))
+			globalBufferPool.PutResultSetWrapper(wrapper)
+			
+			return nil, fmt.Errorf("failed to execute statement: %s", errorMsg)
 		}
 
 		// Clean up the prepared statement as we don't need it anymore
 		C.duckdb_destroy_prepare(&stmt)
 
-		// Create rows
-		return newRows(&result), nil
+		// Create rows with the result wrapper
+		// The Rows object will be responsible for returning the wrapper to the pool
+		return newRowsWithWrapper(wrapper), nil
 	} else {
-		// Direct query execution
-		var result C.duckdb_result
-		if err := C.duckdb_query(*c.conn, cQuery, &result); err == C.DuckDBError {
-			return nil, fmt.Errorf("failed to execute query: %s", goString(C.duckdb_result_error(&result)))
+		// Direct query execution with pooled result - pass by address since it's a struct now
+		if err := C.duckdb_query(*c.conn, cQuery, &wrapper.result); err == C.DuckDBError {
+			// Get error message before returning wrapper to pool
+			errorMsg := goString(C.duckdb_result_error(&wrapper.result))
+			globalBufferPool.PutResultSetWrapper(wrapper)
+			
+			return nil, fmt.Errorf("failed to execute query: %s", errorMsg)
 		}
 
-		// Create rows
-		return newRows(&result), nil
+		// Create rows with the pooled wrapper
+		// The Rows object will be responsible for returning the wrapper to the pool
+		return newRowsWithWrapper(wrapper), nil
 	}
 }
 

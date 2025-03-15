@@ -149,14 +149,22 @@ func (s *Statement) Query(args []driver.Value) (driver.Rows, error) {
 		return nil, err
 	}
 
-	// Execute statement
-	var result C.duckdb_result
-	if err := C.duckdb_execute_prepared(*s.stmt, &result); err == C.DuckDBError {
-		return nil, fmt.Errorf("failed to execute statement: %s", goString(C.duckdb_result_error(&result)))
+	// Get a result set wrapper from the pool
+	// The wrapper comes pre-allocated and ready to use
+	wrapper := globalBufferPool.GetResultSetWrapper()
+
+	// Execute statement with pooled result - pass by address since it's a struct now
+	if err := C.duckdb_execute_prepared(*s.stmt, &wrapper.result); err == C.DuckDBError {
+		// Get error message before returning wrapper to pool
+		errorMsg := goString(C.duckdb_result_error(&wrapper.result))
+		globalBufferPool.PutResultSetWrapper(wrapper)
+		
+		return nil, fmt.Errorf("failed to execute statement: %s", errorMsg)
 	}
 
-	// Create rows
-	return newRows(&result), nil
+	// Create rows with the pooled wrapper
+	// The Rows object will be responsible for returning the wrapper to the pool
+	return newRowsWithWrapper(wrapper), nil
 }
 
 // Helper function to bind parameters to a prepared statement

@@ -15,6 +15,7 @@ package duckdb
 #cgo windows,arm64 LDFLAGS: -L${SRCDIR}/lib/windows/arm64 -lduckdb -lstdc++
 
 #include <stdlib.h>
+#include <string.h>
 #include <duckdb.h>
 */
 import "C"
@@ -86,6 +87,10 @@ type ResultBufferPool struct {
 	// StringBufferPool holds a pool of byte slices used for string conversions
 	// This provides multiple buffers for string processing to reduce contention
 	stringBufferPool sync.Pool
+	
+	// ResultSetPool holds a pool of result set wrappers
+	// This allows complete reuse of result set structures across queries
+	resultSetPool sync.Pool
 	
 	// SharedStringMap is a global intern map for string deduplication across all queries
 	// This allows strings to be reused between queries, greatly reducing allocations
@@ -348,6 +353,51 @@ func (p *ResultBufferPool) PeriodicCleanup() {
 	}
 	
 	p.sharedStringMap = newMap
+}
+
+// ResultSetWrapper is a reusable wrapper around C.duckdb_result
+// It allows pooling of result set resources to avoid allocations
+type ResultSetWrapper struct {
+	result      C.duckdb_result // The actual result structure (not a pointer to avoid extra alloc)
+	isAllocated bool            // Whether the result is currently allocated/valid
+}
+
+// GetResultSetWrapper retrieves a result set wrapper from the pool or creates a new one.
+func (p *ResultBufferPool) GetResultSetWrapper() *ResultSetWrapper {
+	if wrapper, ok := p.resultSetPool.Get().(*ResultSetWrapper); ok {
+		// Reset the wrapper for reuse, preserving the underlying memory
+		if wrapper.isAllocated {
+			// Clear the previous result but don't free memory
+			C.memset(unsafe.Pointer(&wrapper.result), 0, C.sizeof_duckdb_result)
+		}
+		wrapper.isAllocated = true
+		return wrapper
+	}
+	
+	// Create a new wrapper with zero-initialized result
+	wrapper := &ResultSetWrapper{
+		isAllocated: true,
+	}
+	// No need to allocate anything - we'll use the struct directly
+	return wrapper
+}
+
+// PutResultSetWrapper returns a result set wrapper to the pool for reuse.
+// It ensures proper cleanup of any allocated DuckDB result.
+func (p *ResultBufferPool) PutResultSetWrapper(wrapper *ResultSetWrapper) {
+	if wrapper == nil {
+		return
+	}
+	
+	// Clean up any DuckDB resources, but keep our structure
+	if wrapper.isAllocated {
+		C.duckdb_destroy_result(&wrapper.result)
+		// Zero out the struct to avoid lingering pointers
+		C.memset(unsafe.Pointer(&wrapper.result), 0, C.sizeof_duckdb_result)
+	}
+	
+	// Return the wrapper to the pool
+	p.resultSetPool.Put(wrapper)
 }
 
 // Global shared buffer pool for all connections

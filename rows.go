@@ -30,17 +30,20 @@ type Rows struct {
 	// BLOB buffers to reduce allocations for BLOB data
 	// Maps column index to buffer for reuse during iteration
 	blobBuffers  map[int][]byte
+	// Result wrapper for pooled results
+	resultWrapper *ResultSetWrapper
 	// Flags to track which buffers came from the pool
 	fromPool     struct {
 		strCache    bool
 		columnNames bool
 		columnTypes bool
 		blobBuffers bool
+		resultWrapper bool
 	}
 }
 
 // newRows creates a new Rows instance from a DuckDB result.
-// It uses buffer pooling to minimize allocations.
+// It uses buffer pooling to minimize allocations, but doesn't use a result wrapper.
 func newRows(result *C.duckdb_result) *Rows {
 	// Get column count
 	columnCount := C.duckdb_column_count(result)
@@ -80,6 +83,69 @@ func newRows(result *C.duckdb_result) *Rows {
 	return rows
 }
 
+// newRowsWithWrapper creates a new Rows instance from a pooled result wrapper.
+// It uses comprehensive buffer pooling to minimize allocations.
+func newRowsWithWrapper(wrapper *ResultSetWrapper) *Rows {
+	if wrapper == nil || !wrapper.isAllocated {
+		// This should never happen, but let's avoid panic
+		return &Rows{
+			result:     nil,
+			rowCount:   0,
+			currentRow: 0,
+			blobBuffers: make(map[int][]byte),
+		}
+	}
+	
+	// Get column count - use address of wrapper.result
+	columnCount := C.duckdb_column_count(&wrapper.result)
+	colCountInt := int(columnCount)
+	
+	// Get row count - use address of wrapper.result
+	rowCount := C.duckdb_row_count(&wrapper.result)
+	
+	// Create a new rows instance with pooled resources
+	rows := &Rows{
+		result:       &wrapper.result, // Store a pointer to the result inside the wrapper
+		resultWrapper: wrapper,        // Store the wrapper for later return to pool
+		rowCount:     rowCount,
+		currentRow:   0,
+		blobBuffers:  make(map[int][]byte), // Initialize blob buffers map
+	}
+	
+	// Mark everything as coming from pool for proper cleanup
+	rows.fromPool.resultWrapper = true
+	rows.fromPool.blobBuffers = true
+	
+	// Get column names buffer from pool
+	rows.columnNames = globalBufferPool.GetColumnNamesBuffer(colCountInt)
+	rows.fromPool.columnNames = true
+	
+	// Get column types buffer from pool
+	rows.columnTypes = globalBufferPool.GetColumnTypesBuffer(colCountInt)
+	rows.fromPool.columnTypes = true
+	
+	// Get string cache from pool
+	rows.strCache = globalBufferPool.GetStringCache(colCountInt)
+	rows.fromPool.strCache = true
+	
+	// Populate column names and types with shared string map for maximum reuse
+	for i := C.idx_t(0); i < columnCount; i++ {
+		iInt := int(i)
+		
+		// Get column name - use the shared string map for these since they're commonly repeated
+		cname := C.duckdb_column_name(&wrapper.result, i)
+		colName := goString(cname)
+		
+		// Use shared string map for column names which are often repeated
+		rows.columnNames[iInt] = globalBufferPool.GetSharedString(colName)
+		
+		// Store column type
+		rows.columnTypes[iInt] = C.duckdb_column_type(&wrapper.result, i)
+	}
+	
+	return rows
+}
+
 // Columns returns the column names.
 func (r *Rows) Columns() []string {
 	return r.columnNames
@@ -89,12 +155,6 @@ func (r *Rows) Columns() []string {
 func (r *Rows) Close() error {
 	if !atomic.CompareAndSwapInt32(&r.closed, 0, 1) {
 		return nil
-	}
-	
-	// Free the C resources first
-	if r.result != nil {
-		C.duckdb_destroy_result(r.result)
-		r.result = nil
 	}
 	
 	// Return buffers to the pool if they came from there
@@ -119,6 +179,18 @@ func (r *Rows) Close() error {
 			globalBufferPool.PutBlobBuffer(buf)
 		}
 		r.blobBuffers = nil
+	}
+	
+	// If we have a result wrapper, return it to the pool
+	// This will handle freeing the C resources
+	if r.fromPool.resultWrapper && r.resultWrapper != nil {
+		globalBufferPool.PutResultSetWrapper(r.resultWrapper)
+		r.resultWrapper = nil
+		r.result = nil
+	} else if r.result != nil {
+		// If we don't have a wrapper but have a result, free it directly
+		C.duckdb_destroy_result(r.result)
+		r.result = nil
 	}
 	
 	return nil
