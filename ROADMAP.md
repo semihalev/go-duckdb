@@ -17,13 +17,21 @@ Create the fastest, most reliable, zero-allocation DuckDB driver for Go, leverag
 
 ## Development Roadmap
 
+### Immediate Priority
+
+- [ ] **Ensure full compatibility with DuckDB v1.2.0**
+  - Test all driver functionality against DuckDB v1.2.0
+  - Update C bindings for any API changes in the latest version
+  - Add version detection mechanisms to support multiple DuckDB versions
+  - Create compatibility test suite for v1.2.0
+
 ### Phase 1: Core Functionality Enhancements (Current)
 
 - [x] Initial implementation with standard SQL interfaces
 - [x] Thread-safety with atomic operations
 - [x] Context support for cancellation
 - [x] Basic transaction support
-- [ ] Implement `driver.QueryerContext` and `driver.ExecerContext` for direct context support
+- [x] Implement `driver.QueryerContext` and `driver.ExecerContext` for direct context support
 - [ ] Implement `driver.NamedValueChecker` for better parameter binding
 - [ ] Add connection configuration options (timeouts, cache settings)
 - [ ] Add better error handling and detailed error messages
