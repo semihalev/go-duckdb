@@ -18,6 +18,7 @@ import "C"
 import (
 	"database/sql"
 	"database/sql/driver"
+	"sync"
 	"unsafe"
 )
 
@@ -54,6 +55,115 @@ func cBoolToGo(b C.bool) bool {
 	// Any non-zero value is considered true
 	return *(*C.char)(ptr) != 0
 }
+
+// ResultBufferPool provides a pooled set of resources for query results
+// to minimize allocations during query execution.
+type ResultBufferPool struct {
+	// StringCachePool holds a pool of string caches that can be reused
+	// This significantly reduces allocations for string-heavy queries
+	stringCachePool sync.Pool
+
+	// ColumnNamesPool holds a pool of slices used for column names
+	// Reusing these slices reduces allocations for repeated queries
+	columnNamesPool sync.Pool
+	
+	// ColumnTypesPool holds a pool of slices used for column types
+	// Reusing these slices reduces allocations for repeated queries
+	columnTypesPool sync.Pool
+	
+	// NamedArgsPool holds a pool of slices used for parameter binding
+	// Reusing these slices reduces allocations for prepared statements
+	namedArgsPool sync.Pool
+}
+
+// GetStringCache retrieves a StringCache from the pool or creates a new one.
+// The initialCapacity parameter specifies the initial number of columns.
+func (p *ResultBufferPool) GetStringCache(initialCapacity int) *StringCache {
+	if cache, ok := p.stringCachePool.Get().(*StringCache); ok {
+		// Ensure the cache has sufficient capacity
+		if len(cache.columnValues) < initialCapacity {
+			cache.columnValues = make([]string, initialCapacity)
+		}
+		return cache
+	}
+	
+	// Create new cache if none in pool
+	return NewStringCache(initialCapacity)
+}
+
+// PutStringCache returns a StringCache to the pool for reuse.
+func (p *ResultBufferPool) PutStringCache(cache *StringCache) {
+	if cache == nil {
+		return
+	}
+	
+	// Reset the cache to prevent holding onto too much memory
+	if len(cache.internMap) > 1000 {
+		cache.Reset()
+	}
+	
+	p.stringCachePool.Put(cache)
+}
+
+// GetColumnNamesBuffer retrieves a slice for column names from the pool or creates a new one.
+func (p *ResultBufferPool) GetColumnNamesBuffer(capacity int) []string {
+	if buf, ok := p.columnNamesPool.Get().([]string); ok {
+		if cap(buf) >= capacity {
+			return buf[:capacity]
+		}
+	}
+	
+	// Create new buffer if none in pool or too small
+	return make([]string, capacity)
+}
+
+// PutColumnNamesBuffer returns a column names buffer to the pool for reuse.
+func (p *ResultBufferPool) PutColumnNamesBuffer(buf []string) {
+	if buf != nil && cap(buf) > 0 {
+		p.columnNamesPool.Put(buf[:0]) // Clear slice but keep capacity
+	}
+}
+
+// GetColumnTypesBuffer retrieves a slice for column types from the pool or creates a new one.
+func (p *ResultBufferPool) GetColumnTypesBuffer(capacity int) []C.duckdb_type {
+	if buf, ok := p.columnTypesPool.Get().([]C.duckdb_type); ok {
+		if cap(buf) >= capacity {
+			return buf[:capacity]
+		}
+	}
+	
+	// Create new buffer if none in pool or too small
+	return make([]C.duckdb_type, capacity)
+}
+
+// PutColumnTypesBuffer returns a column types buffer to the pool for reuse.
+func (p *ResultBufferPool) PutColumnTypesBuffer(buf []C.duckdb_type) {
+	if buf != nil && cap(buf) > 0 {
+		p.columnTypesPool.Put(buf[:0]) // Clear slice but keep capacity
+	}
+}
+
+// GetNamedArgsBuffer retrieves a slice for named arguments from the pool or creates a new one.
+func (p *ResultBufferPool) GetNamedArgsBuffer(capacity int) []driver.NamedValue {
+	if buf, ok := p.namedArgsPool.Get().([]driver.NamedValue); ok {
+		if cap(buf) >= capacity {
+			return buf[:capacity]
+		}
+	}
+	
+	// Create new buffer if none in pool or too small
+	return make([]driver.NamedValue, capacity)
+}
+
+// PutNamedArgsBuffer returns a named arguments buffer to the pool for reuse.
+func (p *ResultBufferPool) PutNamedArgsBuffer(buf []driver.NamedValue) {
+	if buf != nil && cap(buf) > 0 {
+		p.namedArgsPool.Put(buf[:0]) // Clear slice but keep capacity
+	}
+}
+
+// Global shared buffer pool for all connections
+var globalBufferPool = &ResultBufferPool{}
 
 // Driver implements the database/sql/driver.Driver interface.
 type Driver struct{}

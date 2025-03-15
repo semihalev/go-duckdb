@@ -93,8 +93,11 @@ func (s *Statement) Exec(args []driver.Value) (driver.Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Get named arguments buffer from pool to reduce allocations
+	namedArgs := globalBufferPool.GetNamedArgsBuffer(len(args))
+	defer globalBufferPool.PutNamedArgsBuffer(namedArgs) // Return to pool when done
+	
 	// Convert to named values for binding
-	namedArgs := make([]driver.NamedValue, len(args))
 	for i, arg := range args {
 		namedArgs[i] = driver.NamedValue{
 			Ordinal: i + 1,
@@ -135,9 +138,12 @@ func (s *Statement) Query(args []driver.Value) (driver.Rows, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	
+	// Get named arguments buffer from pool to reduce allocations
+	namedArgs := globalBufferPool.GetNamedArgsBuffer(len(args))
+	defer globalBufferPool.PutNamedArgsBuffer(namedArgs) // Return to pool when done
 
 	// Convert to named values for binding
-	namedArgs := make([]driver.NamedValue, len(args))
 	for i, arg := range args {
 		namedArgs[i] = driver.NamedValue{
 			Ordinal: i + 1,

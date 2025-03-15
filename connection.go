@@ -200,6 +200,7 @@ func (c *Connection) ExecContext(ctx context.Context, query string, args []drive
 }
 
 // QueryContext executes a query with the provided context.
+// It uses buffer pooling to minimize allocations.
 func (c *Connection) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	if atomic.LoadInt32(&c.closed) != 0 {
 		return nil, driver.ErrBadConn

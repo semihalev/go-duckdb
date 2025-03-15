@@ -34,33 +34,51 @@ type Rows struct {
 	closed       int32
 	// Cache for string values to reduce allocations
 	strCache     *StringCache
+	// Flags to track which buffers came from the pool
+	fromPool     struct {
+		strCache    bool
+		columnNames bool
+		columnTypes bool
+	}
 }
 
 // newRows creates a new Rows instance from a DuckDB result.
+// It uses buffer pooling to minimize allocations.
 func newRows(result *C.duckdb_result) *Rows {
 	// Get column count
 	columnCount := C.duckdb_column_count(result)
+	colCountInt := int(columnCount)
 	
 	// Get row count
 	rowCount := C.duckdb_row_count(result)
 	
-	// Get column names and types
-	names := make([]string, columnCount)
-	types := make([]C.duckdb_type, columnCount)
+	// Create a new rows instance with pooled buffers
+	rows := &Rows{
+		result:     result,
+		rowCount:   rowCount,
+		currentRow: 0,
+	}
 	
+	// Get column names buffer from pool
+	rows.columnNames = globalBufferPool.GetColumnNamesBuffer(colCountInt)
+	rows.fromPool.columnNames = true
+	
+	// Get column types buffer from pool
+	rows.columnTypes = globalBufferPool.GetColumnTypesBuffer(colCountInt)
+	rows.fromPool.columnTypes = true
+	
+	// Get string cache from pool
+	rows.strCache = globalBufferPool.GetStringCache(colCountInt)
+	rows.fromPool.strCache = true
+	
+	// Populate column names and types
 	for i := C.idx_t(0); i < columnCount; i++ {
-		names[i] = goString(C.duckdb_column_name(result, i))
-		types[i] = C.duckdb_column_type(result, i)
+		iInt := int(i)
+		rows.columnNames[iInt] = goString(C.duckdb_column_name(result, i))
+		rows.columnTypes[iInt] = C.duckdb_column_type(result, i)
 	}
 	
-	return &Rows{
-		result:      result,
-		columnNames: names,
-		columnTypes: types,
-		rowCount:    rowCount,
-		currentRow:  0,
-		strCache:    NewStringCache(int(columnCount)), // Initialize string cache
-	}
+	return rows
 }
 
 // Columns returns the column names.
@@ -68,15 +86,32 @@ func (r *Rows) Columns() []string {
 	return r.columnNames
 }
 
-// Close closes the rows.
+// Close closes the rows and returns resources to the buffer pool.
 func (r *Rows) Close() error {
 	if !atomic.CompareAndSwapInt32(&r.closed, 0, 1) {
 		return nil
 	}
 	
+	// Free the C resources first
 	if r.result != nil {
 		C.duckdb_destroy_result(r.result)
 		r.result = nil
+	}
+	
+	// Return buffers to the pool if they came from there
+	if r.fromPool.strCache && r.strCache != nil {
+		globalBufferPool.PutStringCache(r.strCache)
+		r.strCache = nil
+	}
+	
+	if r.fromPool.columnNames {
+		globalBufferPool.PutColumnNamesBuffer(r.columnNames)
+		r.columnNames = nil
+	}
+	
+	if r.fromPool.columnTypes {
+		globalBufferPool.PutColumnTypesBuffer(r.columnTypes)
+		r.columnTypes = nil
 	}
 	
 	return nil
@@ -191,10 +226,13 @@ func (sc *StringCache) GetFromBytes(colIdx int, bytes []byte) string {
 	return s
 }
 
+// Common empty string instance to avoid allocations for empty strings
+var emptyString = ""
+
 // GetFromCString safely converts a C string to a Go string with minimal allocations
 func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t) string {
 	if cstr == nil {
-		return ""
+		return emptyString
 	}
 	
 	// Ensure the column values slice is large enough
@@ -208,7 +246,7 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 	
 	// Fast path optimization for empty strings
 	if length == 0 {
-		return ""
+		return emptyString
 	}
 	
 	// Safety check - if length is unreasonably large, cap it

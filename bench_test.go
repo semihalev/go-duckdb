@@ -763,6 +763,91 @@ func BenchmarkQueryRowsNoScan(b *testing.B) {
 	}
 }
 
+// BenchmarkBufferPooling benchmarks query execution with buffer pooling
+func BenchmarkBufferPooling(b *testing.B) {
+	db, err := sql.Open("duckdb", ":memory:")
+	if err != nil {
+		b.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create a test table with various column types
+	_, err = db.Exec(`
+		CREATE TABLE pooling_test (
+			id INTEGER,
+			name VARCHAR,
+			num DOUBLE,
+			flag BOOLEAN,
+			created_at TIMESTAMP
+		)`)
+	if err != nil {
+		b.Fatalf("failed to create table: %v", err)
+	}
+
+	// Insert test data
+	stmt, err := db.Prepare("INSERT INTO pooling_test VALUES (?, ?, ?, ?, ?)")
+	if err != nil {
+		b.Fatalf("failed to prepare statement: %v", err)
+	}
+
+	// Insert some test data - 1000 rows
+	for i := 0; i < 1000; i++ {
+		_, err = stmt.Exec(
+			i,
+			fmt.Sprintf("name-%d", i%10), // Only 10 unique names to test string cache
+			float64(i),
+			i%2 == 0, // alternating booleans
+			time.Now().Add(time.Duration(i)*time.Hour),
+		)
+		if err != nil {
+			b.Fatalf("failed to insert row: %v", err)
+		}
+	}
+	stmt.Close()
+
+	// Prepare query statement
+	query := "SELECT * FROM pooling_test WHERE id >= ? LIMIT ?"
+	prepStmt, err := db.Prepare(query)
+	if err != nil {
+		b.Fatalf("failed to prepare query statement: %v", err)
+	}
+	defer prepStmt.Close()
+
+	b.Run("RepeatedQueries", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		// Execute same query repeatedly to see benefits of buffer pooling
+		for i := 0; i < b.N; i++ {
+			rows, err := prepStmt.Query(i%900, 100) // Random starting point, 100 rows
+			if err != nil {
+				b.Fatalf("failed to execute query: %v", err)
+			}
+
+			// Process all rows to ensure everything is allocated
+			var id int
+			var name string
+			var num float64
+			var flag bool
+			var created time.Time
+			count := 0
+
+			for rows.Next() {
+				if err := rows.Scan(&id, &name, &num, &flag, &created); err != nil {
+					rows.Close()
+					b.Fatalf("failed to scan row: %v", err)
+				}
+				count++
+			}
+			rows.Close()
+
+			if err := rows.Err(); err != nil {
+				b.Fatalf("error during iteration: %v", err)
+			}
+		}
+	})
+}
+
 func BenchmarkComplexQuery(b *testing.B) {
 	// Skip this benchmark for now as we're focusing on simpler benchmarks first
 	b.Skip("Skipping complex query benchmark for now")

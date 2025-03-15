@@ -17,11 +17,11 @@ This document tracks the tasks needed to make the go-duckdb driver fully compati
   - [x] Fix boolean handling in result sets
   - [ ] Add comprehensive tests for boolean parameters and results
 
-- [ ] Optimize query result memory usage
+- [x] Optimize query result memory usage
   - [x] Implement enhanced string interning with byte buffer reuse
   - [x] Add optimized C string conversion with minimal allocations
-  - [ ] Add buffer pooling for result sets to further reduce allocations
-  - [ ] Implement periodic StringCache cleanup to prevent memory leaks
+  - [x] Add buffer pooling for result sets to further reduce allocations
+  - [x] Implement periodic StringCache cleanup to prevent memory leaks
 
 - [ ] Investigate and fix remaining parameter binding issues with prepared statements
   - [ ] Add tests to verify parameter binding is working correctly
