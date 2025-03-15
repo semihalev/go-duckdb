@@ -127,16 +127,17 @@ func (r *Rows) Close() error {
 // StringCache is an optimized cache system for strings that reduces allocations
 // It uses string interning and byte buffer pooling to minimize GC pressure
 type StringCache struct {
-	// Column-specific caches
+	// Column-specific caches for quick access by column index
 	columnValues []string
 	
-	// Global string intern map for value deduplication across all columns
-	// This dramatically reduces allocations for repeated values
+	// Local string intern map for value deduplication across all columns
+	// This dramatically reduces allocations for repeated values within a query
 	internMap map[string]string
 	
-	// Byte buffer for string conversion to avoid allocations
-	// This is reused for each string conversion
-	byteBuffer []byte
+	// Multiple byte buffers for string conversion to avoid allocations and contention
+	// Using [][]byte allows us to reuse multiple buffers for concurrent column access
+	buffers [][]byte
+	bufferIndex int // Current buffer index for round-robin selection
 	
 	// Max buffer size to prevent unbounded growth
 	maxBufferSize int
@@ -144,15 +145,28 @@ type StringCache struct {
 	// Statistics for monitoring
 	hits   int
 	misses int
+	
+	// Flag indicating whether this cache uses the global string map
+	useSharedStringMap bool
 }
 
 // NewStringCache creates a new optimized string cache with capacity for the given number of columns.
 func NewStringCache(columns int) *StringCache {
+	// Create multiple buffers for string conversion to reduce contention
+	bufferCount := 4 // Use 4 buffers by default for reasonable concurrency
+	buffers := make([][]byte, bufferCount)
+	
+	// Initialize each buffer to a reasonable starting size
+	for i := range buffers {
+		buffers[i] = make([]byte, 1024) // Initial 1KB buffer
+	}
+	
 	return &StringCache{
 		columnValues:  make([]string, columns),
 		internMap:     make(map[string]string, 1024), // Start with capacity for 1024 unique strings
-		byteBuffer:    make([]byte, 1024),            // Initial 1KB buffer
-		maxBufferSize: 1024 * 1024,                   // Max 1MB buffer size
+		buffers:       buffers,
+		maxBufferSize: 4 * 1024 * 1024,            // Max 4MB buffer size
+		useSharedStringMap: true,                  // Enable shared string map by default
 	}
 }
 
@@ -165,72 +179,145 @@ func (sc *StringCache) Get(colIdx int, value string) string {
 		sc.columnValues = newValues
 	}
 	
-	// First check if we've seen this exact string before
+	// First check if we've seen this exact string before in our local cache
 	if cached, ok := sc.internMap[value]; ok {
 		sc.columnValues[colIdx] = cached
 		sc.hits++
 		return cached
 	}
 	
-	// Cache miss - store in the intern map to deduplicate future occurrences
-	sc.internMap[value] = value
-	sc.columnValues[colIdx] = value
+	var finalString string
+	
+	// If shared string map is enabled, try to get or add to the global map
+	if sc.useSharedStringMap && len(value) < 1024 {
+		finalString = globalBufferPool.GetSharedString(value)
+	} else {
+		// Otherwise use our local map only
+		finalString = value
+		// Store in the local intern map to deduplicate future occurrences
+		sc.internMap[value] = value
+	}
+	
+	sc.columnValues[colIdx] = finalString
 	sc.misses++
 	
-	return value
+	return finalString
 }
 
 // GetFromBytes converts a byte slice to a string with minimal allocations
 // By reusing an internal buffer when possible
 func (sc *StringCache) GetFromBytes(colIdx int, bytes []byte) string {
+	// Ensure the column values slice is large enough
+	if colIdx >= len(sc.columnValues) {
+		// Expand capacity if needed - this should be rare
+		newSize := colIdx + 8 // Add some margin to reduce future expansions
+		newValues := make([]string, newSize)
+		copy(newValues, sc.columnValues)
+		sc.columnValues = newValues
+	}
+	
+	// Get the current buffer in round-robin fashion
+	sc.bufferIndex = (sc.bufferIndex + 1) % len(sc.buffers)
+	currentBuffer := sc.buffers[sc.bufferIndex]
+	
 	// Fast path: if we can reuse our buffer
-	if len(bytes) <= len(sc.byteBuffer) {
+	if len(bytes) <= len(currentBuffer) {
 		// Copy bytes to our reusable buffer
-		copy(sc.byteBuffer, bytes)
+		copy(currentBuffer, bytes)
 		// Create string from our buffer's first n bytes
-		s := string(sc.byteBuffer[:len(bytes)])
+		s := string(currentBuffer[:len(bytes)])
 		
-		// Try to get from intern map
+		// Try to get from local intern map first
 		if cached, ok := sc.internMap[s]; ok {
 			sc.columnValues[colIdx] = cached
 			sc.hits++
 			return cached
 		}
 		
-		// Store in intern map
-		sc.internMap[s] = s
-		sc.columnValues[colIdx] = s
-		sc.misses++
-		return s
-	}
-	
-	// If bytes won't fit in our buffer but aren't huge, grow the buffer
-	// This amortizes allocations over time
-	if len(bytes) <= sc.maxBufferSize {
-		// Grow buffer to accommodate this size with some room to grow
-		newSize := len(bytes) * 2
-		if newSize > sc.maxBufferSize {
-			newSize = sc.maxBufferSize
+		var finalString string
+		
+		// If shared string map is enabled, try to get or add to the global map
+		if sc.useSharedStringMap && len(s) < 1024 {
+			finalString = globalBufferPool.GetSharedString(s)
+		} else {
+			// Otherwise use our local map only
+			finalString = s
+			// Store in the local intern map to deduplicate future occurrences
+			sc.internMap[s] = s
 		}
-		sc.byteBuffer = make([]byte, newSize)
-		return sc.GetFromBytes(colIdx, bytes) // Retry with larger buffer
+		
+		sc.columnValues[colIdx] = finalString
+		sc.misses++
+		return finalString
 	}
 	
-	// If bytes are larger than our max buffer, just convert directly
-	// This is a rare case for very large strings
+	// If bytes won't fit in our current buffer
+	if len(bytes) <= sc.maxBufferSize {
+		// Get a buffer from the pool or create a new one
+		newBuffer := globalBufferPool.GetStringBuffer(len(bytes))
+		
+		// Copy bytes to the buffer
+		copy(newBuffer, bytes)
+		
+		// Create string from buffer
+		s := string(newBuffer[:len(bytes)])
+		
+		// Try to get from local intern map first
+		if cached, ok := sc.internMap[s]; ok {
+			// Return the buffer to the pool before returning
+			globalBufferPool.PutStringBuffer(newBuffer)
+			
+			sc.columnValues[colIdx] = cached
+			sc.hits++
+			return cached
+		}
+		
+		var finalString string
+		
+		// If shared string map is enabled, try to get or add to the global map
+		if sc.useSharedStringMap && len(s) < 1024 {
+			finalString = globalBufferPool.GetSharedString(s)
+		} else {
+			// Otherwise use our local map only
+			finalString = s
+			// Store in the local intern map to deduplicate future occurrences
+			sc.internMap[s] = s
+		}
+		
+		// Return the buffer to the pool
+		globalBufferPool.PutStringBuffer(newBuffer)
+		
+		sc.columnValues[colIdx] = finalString
+		sc.misses++
+		return finalString
+	}
+	
+	// For very large strings, just convert directly
 	s := string(bytes)
 	
-	// Still try to intern for future uses
+	// Try to get from local intern map first
 	if cached, ok := sc.internMap[s]; ok {
 		sc.columnValues[colIdx] = cached
 		sc.hits++
 		return cached
 	}
 	
-	sc.internMap[s] = s
-	sc.columnValues[colIdx] = s
+	var finalString string
+	
+	// Only use shared map for reasonably sized strings to prevent memory bloat
+	if sc.useSharedStringMap && len(s) < 1024 {
+		finalString = globalBufferPool.GetSharedString(s)
+	} else {
+		finalString = s
+		// Only intern reasonably sized strings locally
+		if len(s) < 4096 {
+			sc.internMap[s] = s
+		}
+	}
+	
+	sc.columnValues[colIdx] = finalString
 	sc.misses++
-	return s
+	return finalString
 }
 
 // Common empty string instance to avoid allocations for empty strings
@@ -262,14 +349,18 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 		actualLength = 1024 * 1024
 	}
 	
-	// If string fits in our buffer, use it to avoid allocations
-	if actualLength <= len(sc.byteBuffer) {
+	// Get the current buffer in round-robin fashion to reduce contention
+	sc.bufferIndex = (sc.bufferIndex + 1) % len(sc.buffers)
+	currentBuffer := sc.buffers[sc.bufferIndex]
+	
+	// If string fits in our current buffer, use it to avoid allocations
+	if actualLength <= len(currentBuffer) {
 		// Copy from C memory to our buffer with bounds checking
-		for i := 0; i < actualLength && i < len(sc.byteBuffer); i++ {
+		for i := 0; i < actualLength && i < len(currentBuffer); i++ {
 			// Use pointer arithmetic but with safety checks
 			bytePtr := (*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(cstr)) + uintptr(i)))
 			if bytePtr != nil {
-				sc.byteBuffer[i] = byte(*bytePtr)
+				currentBuffer[i] = byte(*bytePtr)
 			} else {
 				// Truncate if we hit a null pointer (shouldn't happen, but safety first)
 				actualLength = i
@@ -278,55 +369,115 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 		}
 		
 		// Create string from buffer
-		s := string(sc.byteBuffer[:actualLength])
+		s := string(currentBuffer[:actualLength])
 		
-		// Get from intern map or add to it
+		// First try to get from our local cache
 		if cached, ok := sc.internMap[s]; ok {
 			sc.columnValues[colIdx] = cached
 			sc.hits++
 			return cached
 		}
 		
-		// Only intern strings under reasonable size to prevent memory bloat
-		if len(s) < 1024 {
-			sc.internMap[s] = s
+		var finalString string
+		
+		// If shared string map is enabled, try to get or add to the global map
+		if sc.useSharedStringMap && len(s) < 1024 {
+			finalString = globalBufferPool.GetSharedString(s)
+		} else {
+			// Otherwise use our local map only
+			finalString = s
+			// Only intern strings under reasonable size to prevent memory bloat
+			if len(s) < 1024 {
+				sc.internMap[s] = s
+			}
 		}
-		sc.columnValues[colIdx] = s
+		
+		sc.columnValues[colIdx] = finalString
 		sc.misses++
-		return s
+		return finalString
 	}
 	
-	// If bytes won't fit in our buffer but aren't huge, grow the buffer
-	// This amortizes allocations over time
+	// If bytes won't fit in our current buffer but aren't huge
 	if actualLength <= sc.maxBufferSize {
-		// Grow buffer to accommodate this size with some room to grow
-		newSize := actualLength * 2
-		if newSize > sc.maxBufferSize {
-			newSize = sc.maxBufferSize
+		// Get a buffer from the pool instead of growing our internal one
+		// This is more efficient for occasional large strings
+		buffer := globalBufferPool.GetStringBuffer(actualLength)
+		
+		// Copy from C memory to our buffer with bounds checking
+		for i := 0; i < actualLength && i < len(buffer); i++ {
+			// Use pointer arithmetic but with safety checks
+			bytePtr := (*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(cstr)) + uintptr(i)))
+			if bytePtr != nil {
+				buffer[i] = byte(*bytePtr)
+			} else {
+				// Truncate if we hit a null pointer (shouldn't happen, but safety first)
+				actualLength = i
+				break
+			}
 		}
-		sc.byteBuffer = make([]byte, newSize)
-		return sc.GetFromCString(colIdx, cstr, length) // Retry with larger buffer
+		
+		// Create string from buffer
+		s := string(buffer[:actualLength])
+		
+		// First try to get from our local cache
+		if cached, ok := sc.internMap[s]; ok {
+			// Return the buffer to the pool before returning the result
+			globalBufferPool.PutStringBuffer(buffer)
+			
+			sc.columnValues[colIdx] = cached
+			sc.hits++
+			return cached
+		}
+		
+		var finalString string
+		
+		// If shared string map is enabled, try to get or add to the global map
+		if sc.useSharedStringMap && len(s) < 1024 {
+			finalString = globalBufferPool.GetSharedString(s)
+		} else {
+			// Otherwise use our local map only
+			finalString = s
+			// Only intern strings under reasonable size to prevent memory bloat
+			if len(s) < 1024 {
+				sc.internMap[s] = s
+			}
+		}
+		
+		// Return the buffer to the pool
+		globalBufferPool.PutStringBuffer(buffer)
+		
+		sc.columnValues[colIdx] = finalString
+		sc.misses++
+		return finalString
 	}
 	
 	// For larger strings, we need to use CGo's conversion
-	// This is more expensive but should be rare
+	// This is more expensive but should be rare for very large strings
 	s := C.GoStringN(cstr, C.int(actualLength))
 	
-	// Only intern reasonably sized strings to prevent memory bloat 
-	if len(s) < 1024 {
-		// Still try to intern
-		if cached, ok := sc.internMap[s]; ok {
-			sc.columnValues[colIdx] = cached
-			sc.hits++
-			return cached
-		}
-		
-		sc.internMap[s] = s
+	// Try to get from local intern map first for large strings too
+	if cached, ok := sc.internMap[s]; ok {
+		sc.columnValues[colIdx] = cached
+		sc.hits++
+		return cached
 	}
 	
-	sc.columnValues[colIdx] = s
+	var finalString string
+	
+	// Only use shared map for reasonably sized strings to prevent memory bloat
+	if sc.useSharedStringMap && len(s) < 1024 {
+		finalString = globalBufferPool.GetSharedString(s)
+	} else {
+		finalString = s
+		// Only intern reasonably sized strings locally
+		if len(s) < 1024 {
+			sc.internMap[s] = s
+		}
+	}
+	
+	sc.columnValues[colIdx] = finalString
 	sc.misses++
-	return s
+	return finalString
 }
 
 // Reset clears the intern map if it grows too large
@@ -361,15 +512,25 @@ func (sc *StringCache) Reset() {
 		sc.hits = 0
 		sc.misses = 0
 		
-		// Use hit rate to dynamically adjust buffer size
+		// Trigger a global cleanup to prevent unbounded growth
+		go globalBufferPool.PeriodicCleanup()
+		
+		// Use hit rate to dynamically adjust buffer sizes
 		hitRate := float64(totalHits) / float64(totalHits+totalMisses)
-		if hitRate < 0.5 && len(sc.byteBuffer) < sc.maxBufferSize/2 {
-			// Low hit rate suggests we need a larger buffer
-			newSize := len(sc.byteBuffer) * 2
-			if newSize > sc.maxBufferSize {
-				newSize = sc.maxBufferSize
+		if hitRate < 0.3 { // Lower threshold to make growth more aggressive
+			// If hit rate is low, we might need larger buffers
+			for i := range sc.buffers {
+				// Get a buffer size that matches our hit rate
+				currentSize := len(sc.buffers[i])
+				if currentSize < sc.maxBufferSize/2 {
+					// Grow buffer to twice its current size
+					newSize := currentSize * 2
+					if newSize > sc.maxBufferSize {
+						newSize = sc.maxBufferSize
+					}
+					sc.buffers[i] = make([]byte, newSize)
+				}
 			}
-			sc.byteBuffer = make([]byte, newSize)
 		}
 	}
 }
@@ -389,6 +550,30 @@ func (sc *StringCache) TuneCache() {
 				newMap[k] = v
 			}
 			sc.internMap = newMap
+		}
+		
+		// Dynamically adjust the number of buffers based on hit rate
+		// If hit rate is very low, we might have contention on buffers
+		if hitRate < 0.2 && len(sc.buffers) < 16 {
+			// Double the number of buffers to reduce contention
+			newBufferCount := len(sc.buffers) * 2
+			if newBufferCount > 16 {
+				newBufferCount = 16 // Cap at 16 buffers to prevent excessive memory usage
+			}
+			
+			// Create new set of buffers
+			newBuffers := make([][]byte, newBufferCount)
+			
+			// Copy existing buffers
+			copy(newBuffers, sc.buffers)
+			
+			// Initialize new buffers
+			for i := len(sc.buffers); i < newBufferCount; i++ {
+				// Start with the same size as the first buffer
+				newBuffers[i] = make([]byte, len(sc.buffers[0]))
+			}
+			
+			sc.buffers = newBuffers
 		}
 	}
 }

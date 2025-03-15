@@ -82,6 +82,16 @@ type ResultBufferPool struct {
 	// BlobBufferPool holds a pool of byte slices used for BLOB data
 	// Reusing these buffers significantly reduces allocations for BLOB-heavy queries
 	blobBufferPool sync.Pool
+	
+	// StringBufferPool holds a pool of byte slices used for string conversions
+	// This provides multiple buffers for string processing to reduce contention
+	stringBufferPool sync.Pool
+	
+	// SharedStringMap is a global intern map for string deduplication across all queries
+	// This allows strings to be reused between queries, greatly reducing allocations
+	// for common values like column names, repeated values, etc.
+	sharedStringMap     map[string]string
+	sharedStringMapLock sync.RWMutex
 }
 
 // GetStringCache retrieves a StringCache from the pool or creates a new one.
@@ -221,8 +231,129 @@ func (p *ResultBufferPool) PutBlobBuffer(buf []byte) {
 	// For buffers outside our desired size range, let them be garbage collected
 }
 
+// GetStringBuffer retrieves a byte slice for string conversions from the pool or creates a new one.
+// This method is similar to GetBlobBuffer but optimized for string handling.
+func (p *ResultBufferPool) GetStringBuffer(minimumCapacity int) []byte {
+	// Round up capacity to the nearest power of 2 to reduce reallocation frequency
+	capacity := 1024 // Start with at least 1KB for reasonable string efficiency
+	for capacity < minimumCapacity {
+		capacity *= 2
+	}
+	
+	// Cap at a reasonable maximum to prevent excessive memory usage
+	const maxStringSize = 8 * 1024 * 1024 // 8MB is more than enough for most strings
+	if capacity > maxStringSize {
+		capacity = maxStringSize
+	}
+	
+	// Try to get a buffer from the pool
+	if buf, ok := p.stringBufferPool.Get().([]byte); ok {
+		// If the buffer from pool is large enough, return it
+		if cap(buf) >= minimumCapacity {
+			return buf[:minimumCapacity]
+		}
+		// If buffer is too small, we'll create a new one and let the old one be GC'd
+	}
+	
+	// Create a new buffer with the calculated capacity
+	return make([]byte, minimumCapacity, capacity)
+}
+
+// PutStringBuffer returns a string buffer to the pool for reuse.
+func (p *ResultBufferPool) PutStringBuffer(buf []byte) {
+	if buf == nil {
+		return
+	}
+	
+	// Only keep reasonably sized buffers in the pool
+	const minPoolableSize = 64         // Don't pool buffers smaller than 64 bytes
+	const maxPoolableSize = 1024 * 1024 // Don't pool buffers larger than 1MB
+	
+	if cap(buf) >= minPoolableSize && cap(buf) <= maxPoolableSize {
+		// Return a zero-length slice but preserve capacity
+		p.stringBufferPool.Put(buf[:0])
+	}
+	// For buffers outside our desired size range, let them be garbage collected
+}
+
+// GetSharedString attempts to find an existing string in the shared map
+// or adds the new string to the map if it's not found.
+// This provides cross-query string deduplication, which is especially
+// beneficial for repeating values like column names, common strings, etc.
+func (p *ResultBufferPool) GetSharedString(s string) string {
+	// Only intern strings under reasonable size to prevent memory bloat
+	if len(s) == 0 {
+		return ""
+	}
+	
+	if len(s) > 1024 {
+		// For longer strings, just return the original without interning
+		return s
+	}
+	
+	// Try read-only first for better performance in the common case
+	p.sharedStringMapLock.RLock()
+	if cached, ok := p.sharedStringMap[s]; ok {
+		p.sharedStringMapLock.RUnlock()
+		return cached
+	}
+	p.sharedStringMapLock.RUnlock()
+	
+	// Not found with read lock, take write lock
+	p.sharedStringMapLock.Lock()
+	defer p.sharedStringMapLock.Unlock()
+	
+	// Double-check after getting write lock
+	if cached, ok := p.sharedStringMap[s]; ok {
+		return cached
+	}
+	
+	// Add to map
+	p.sharedStringMap[s] = s
+	return s
+}
+
+// PeriodicCleanup should be called occasionally to prevent unbounded growth
+// of the shared string map. It's safe to call this function from a goroutine.
+func (p *ResultBufferPool) PeriodicCleanup() {
+	// Don't clean up if map is reasonably sized
+	p.sharedStringMapLock.RLock()
+	size := len(p.sharedStringMap)
+	p.sharedStringMapLock.RUnlock()
+	
+	if size < 100000 {
+		return
+	}
+	
+	// Take write lock and rebuild the map with a smaller capacity
+	p.sharedStringMapLock.Lock()
+	defer p.sharedStringMapLock.Unlock()
+	
+	// Double-check after getting write lock
+	if len(p.sharedStringMap) < 100000 {
+		return
+	}
+	
+	// Keep common and shorter strings, which are more likely to be reused
+	newMap := make(map[string]string, 10000)
+	count := 0
+	for s, v := range p.sharedStringMap {
+		if len(s) <= 64 { // Prioritize keeping shorter strings
+			newMap[s] = v
+			count++
+			if count >= 10000 {
+				break
+			}
+		}
+	}
+	
+	p.sharedStringMap = newMap
+}
+
 // Global shared buffer pool for all connections
-var globalBufferPool = &ResultBufferPool{}
+var globalBufferPool = &ResultBufferPool{
+	sharedStringMap: make(map[string]string, 10000),
+}
 
 // Driver implements the database/sql/driver.Driver interface.
 type Driver struct{}
