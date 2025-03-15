@@ -20,6 +20,9 @@ type rows struct {
 	rowCount int
 	rowIdx   int
 	closed   atomic.Bool
+	// stmtClosed represents whether the statement is owned by the rows
+	// and should be closed when the rows are closed
+	stmtClosed bool
 }
 
 func (r *rows) Columns() []string {
@@ -47,8 +50,14 @@ func (r *rows) Close() error {
 		return nil // Already closed
 	}
 
-	// Note: we don't destroy the result here since it's owned by the stmt
-	// and will be destroyed when the stmt is closed
+	// If the statement is owned by the rows, close it
+	if !r.stmtClosed && r.stmt != nil {
+		r.stmtClosed = true
+		return r.stmt.Close()
+	}
+
+	// Note: we don't destroy the result here when stmt is not owned by rows
+	// since it's owned by the stmt and will be destroyed when the stmt is closed
 	return nil
 }
 

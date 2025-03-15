@@ -130,10 +130,11 @@ func (s *stmt) queryContext(ctx context.Context, args []driver.Value) (driver.Ro
 	defer s.mu.RUnlock()
 
 	return &rows{
-		stmt:     s,
-		colCount: s.colCount,
-		rowCount: int(C.duckdb_row_count(s.result)),
-		rowIdx:   0,
+		stmt:      s,
+		colCount:  s.colCount,
+		rowCount:  int(C.duckdb_row_count(s.result)),
+		rowIdx:    0,
+		stmtClosed: false, // The statement is not owned by the rows in this case
 	}, nil
 }
 

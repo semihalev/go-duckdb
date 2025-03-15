@@ -1,6 +1,7 @@
 package duckdb
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 	"time"
@@ -240,5 +241,187 @@ func TestBlobData(t *testing.T) {
 		if data[i] != testBlob[i] {
 			t.Fatalf("blob data mismatch at position %d: expected %d, got %d", i, testBlob[i], data[i])
 		}
+	}
+}
+
+func TestQueryerContext(t *testing.T) {
+	db, err := sql.Open("duckdb", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create a table with data
+	_, err = db.Exec(`CREATE TABLE query_context_test (id INTEGER, value VARCHAR)`)
+	if err != nil {
+		t.Fatalf("failed to create table: %v", err)
+	}
+
+	// Insert test data
+	_, err = db.Exec(`INSERT INTO query_context_test VALUES (1, 'one'), (2, 'two'), (3, 'three')`)
+	if err != nil {
+		t.Fatalf("failed to insert data: %v", err)
+	}
+
+	// Test with cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	// This should return a context canceled error
+	_, err = db.QueryContext(ctx, "SELECT * FROM query_context_test")
+	if err == nil {
+		t.Fatal("expected context canceled error, got nil")
+	}
+	if err != context.Canceled {
+		t.Fatalf("expected context canceled error, got %v", err)
+	}
+
+	// Test successful query with parameters
+	ctx = context.Background()
+	rows, err := db.QueryContext(ctx, "SELECT id, value FROM query_context_test WHERE id > ?", 1)
+	if err != nil {
+		t.Fatalf("failed to query with context: %v", err)
+	}
+	defer rows.Close()
+
+	// Check results
+	var count int
+	for rows.Next() {
+		var id int
+		var value string
+		err := rows.Scan(&id, &value)
+		if err != nil {
+			t.Fatalf("failed to scan row: %v", err)
+		}
+		count++
+
+		if id <= 1 {
+			t.Fatalf("expected id > 1, got %d", id)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows iteration failed: %v", err)
+	}
+
+	if count != 2 {
+		t.Fatalf("expected 2 rows, got %d", count)
+	}
+}
+
+func TestExecerContext(t *testing.T) {
+	db, err := sql.Open("duckdb", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create a table
+	_, err = db.Exec(`CREATE TABLE exec_context_test (id INTEGER, value VARCHAR)`)
+	if err != nil {
+		t.Fatalf("failed to create table: %v", err)
+	}
+
+	// Test with cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	// This should return a context canceled error
+	_, err = db.ExecContext(ctx, "INSERT INTO exec_context_test VALUES (1, 'test')")
+	if err == nil {
+		t.Fatal("expected context canceled error, got nil")
+	}
+	if err != context.Canceled {
+		t.Fatalf("expected context canceled error, got %v", err)
+	}
+
+	// Test successful exec with parameters
+	ctx = context.Background()
+	result, err := db.ExecContext(ctx, "INSERT INTO exec_context_test VALUES (?, ?), (?, ?)", 1, "one", 2, "two")
+	if err != nil {
+		t.Fatalf("failed to exec with context: %v", err)
+	}
+
+	// Check rows affected
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		t.Fatalf("failed to get rows affected: %v", err)
+	}
+
+	if rowsAffected != 2 {
+		t.Fatalf("expected 2 rows affected, got %d", rowsAffected)
+	}
+
+	// Verify the data was inserted correctly
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM exec_context_test").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to count rows: %v", err)
+	}
+
+	if count != 2 {
+		t.Fatalf("expected 2 rows, got %d", count)
+	}
+}
+
+func TestPrepareContext(t *testing.T) {
+	db, err := sql.Open("duckdb", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	// Create a table
+	_, err = db.Exec(`CREATE TABLE prepare_context_test (id INTEGER, value VARCHAR)`)
+	if err != nil {
+		t.Fatalf("failed to create table: %v", err)
+	}
+
+	// Test with cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	// This should return a context canceled error
+	_, err = db.PrepareContext(ctx, "SELECT * FROM prepare_context_test")
+	if err == nil {
+		t.Fatal("expected context canceled error, got nil")
+	}
+	if err != context.Canceled {
+		t.Fatalf("expected context canceled error, got %v", err)
+	}
+
+	// Test successful prepare with context
+	ctx = context.Background()
+	stmt, err := db.PrepareContext(ctx, "INSERT INTO prepare_context_test VALUES (?, ?)")
+	if err != nil {
+		t.Fatalf("failed to prepare with context: %v", err)
+	}
+	defer stmt.Close()
+
+	// Use the prepared statement
+	result, err := stmt.Exec(1, "test")
+	if err != nil {
+		t.Fatalf("failed to execute prepared statement: %v", err)
+	}
+
+	// Check rows affected
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		t.Fatalf("failed to get rows affected: %v", err)
+	}
+
+	if rowsAffected != 1 {
+		t.Fatalf("expected 1 row affected, got %d", rowsAffected)
+	}
+
+	// Verify the data was inserted correctly
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM prepare_context_test").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to count rows: %v", err)
+	}
+
+	if count != 1 {
+		t.Fatalf("expected 1 row, got %d", count)
 	}
 }

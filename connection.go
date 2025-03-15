@@ -18,6 +18,8 @@ import (
 import "C"
 
 // conn implements database/sql/driver.Conn interface.
+// It also implements driver.ExecerContext, driver.QueryerContext,
+// and driver.ConnPrepareContext for more efficient operations.
 type conn struct {
 	db     *C.duckdb_database
 	conn   *C.duckdb_connection
@@ -53,8 +55,20 @@ func newConnection(dsn string) (*conn, error) {
 }
 
 func (c *conn) Prepare(query string) (driver.Stmt, error) {
+	return c.PrepareContext(context.Background(), query)
+}
+
+// PrepareContext prepares a statement for execution with context
+func (c *conn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
 	if c.closed.Load() {
 		return nil, driver.ErrBadConn
+	}
+
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
 	}
 
 	c.mu.RLock()
@@ -132,8 +146,10 @@ func (c *conn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, e
 	return tx, nil
 }
 
+// ExecContext implements the driver.ExecerContext interface.
+// This allows the driver to execute queries directly without preparing a statement.
 func (c *conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
-	if c.closed {
+	if c.closed.Load() {
 		return nil, driver.ErrBadConn
 	}
 
@@ -145,7 +161,10 @@ func (c *conn) ExecContext(ctx context.Context, query string, args []driver.Name
 		// Continue with execution
 	}
 
+	c.mu.RLock()
 	s, err := c.prepare(query)
+	c.mu.RUnlock()
+	
 	if err != nil {
 		return nil, err
 	}
@@ -186,4 +205,51 @@ func namedValueToValue[T driver.NamedValue, U driver.Value](named []T) ([]U, err
 	}
 	
 	return result, nil
+}
+
+// QueryContext implements the driver.QueryerContext interface.
+// This allows the driver to execute queries directly without preparing a statement.
+func (c *conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if c.closed.Load() {
+		return nil, driver.ErrBadConn
+	}
+
+	// Check for context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Continue with execution
+	}
+
+	c.mu.RLock()
+	s, err := c.prepare(query)
+	c.mu.RUnlock()
+	
+	if err != nil {
+		return nil, err
+	}
+	
+	// Unlike ExecContext, we don't want to defer s.Close() here because the rows will need
+	// access to the statement. The statement will be closed when the rows are closed.
+	
+	// Convert args to values using generics
+	dargs, err := namedValueToValue[driver.NamedValue, driver.Value](args)
+	if err != nil {
+		s.Close() // Close the statement if the query fails
+		return nil, err
+	}
+
+	rows, err := s.queryContext(ctx, dargs)
+	if err != nil {
+		s.Close() // Close the statement if the query fails
+		return nil, err
+	}
+	
+	// The statement is owned by the rows and will be closed when the rows are closed
+	// We need to cast to our internal rows type to set the proper flag
+	rowsImpl := rows.(*rows)
+	rowsImpl.stmtClosed = true
+	
+	return rowsImpl, nil
 }
