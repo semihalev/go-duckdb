@@ -1,7 +1,11 @@
 // Package duckdb provides a zero-allocation, high-performance SQL driver for DuckDB in Go.
 package duckdb
 
+// This file contains the main driver implementation and shared utilities
+
 /*
+// Central definition of CGO flags - these should only be defined once in the entire package
+// to avoid duplicate library linking warnings
 #cgo CFLAGS: -I${SRCDIR}/include
 #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/lib/darwin/amd64 -lduckdb -lstdc++
 #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/lib/darwin/arm64 -lduckdb -lstdc++
@@ -74,6 +78,10 @@ type ResultBufferPool struct {
 	// NamedArgsPool holds a pool of slices used for parameter binding
 	// Reusing these slices reduces allocations for prepared statements
 	namedArgsPool sync.Pool
+	
+	// BlobBufferPool holds a pool of byte slices used for BLOB data
+	// Reusing these buffers significantly reduces allocations for BLOB-heavy queries
+	blobBufferPool sync.Pool
 }
 
 // GetStringCache retrieves a StringCache from the pool or creates a new one.
@@ -160,6 +168,57 @@ func (p *ResultBufferPool) PutNamedArgsBuffer(buf []driver.NamedValue) {
 	if buf != nil && cap(buf) > 0 {
 		p.namedArgsPool.Put(buf[:0]) // Clear slice but keep capacity
 	}
+}
+
+// GetBlobBuffer retrieves a byte slice for BLOB data from the pool or creates a new one.
+// The minimumCapacity parameter specifies the minimum required size of the buffer.
+func (p *ResultBufferPool) GetBlobBuffer(minimumCapacity int) []byte {
+	// Round up capacity to the nearest power of 2 to reduce reallocation frequency
+	// This is a common pattern for buffer sizing to amortize growth costs
+	capacity := 1
+	for capacity < minimumCapacity {
+		capacity *= 2
+	}
+	
+	// Cap at a reasonable maximum to prevent excessive memory usage
+	// 16MB should be more than enough for most BLOB use cases
+	const maxBlobSize = 16 * 1024 * 1024
+	if capacity > maxBlobSize {
+		capacity = maxBlobSize
+	}
+	
+	// Try to get a buffer from the pool
+	if buf, ok := p.blobBufferPool.Get().([]byte); ok {
+		// If the buffer from pool is large enough, return it
+		if cap(buf) >= minimumCapacity {
+			return buf[:minimumCapacity]
+		}
+		// If buffer is too small, we'll create a new one and let the old one be GC'd
+	}
+	
+	// Create a new buffer with the calculated capacity
+	// Return a slice with the exact size requested, but with larger capacity
+	return make([]byte, minimumCapacity, capacity)
+}
+
+// PutBlobBuffer returns a BLOB buffer to the pool for reuse.
+// Only reasonably sized buffers are returned to the pool to prevent
+// memory bloat with extremely large blobs that are rarely used.
+func (p *ResultBufferPool) PutBlobBuffer(buf []byte) {
+	if buf == nil {
+		return
+	}
+	
+	// Only keep reasonably sized buffers in the pool
+	// Very small buffers aren't worth pooling, and very large ones would waste memory
+	const minPoolableSize = 64      // Don't pool buffers smaller than 64 bytes
+	const maxPoolableSize = 1 << 20 // Don't pool buffers larger than 1MB
+	
+	if cap(buf) >= minPoolableSize && cap(buf) <= maxPoolableSize {
+		// Return a zero-length slice but preserve capacity
+		p.blobBufferPool.Put(buf[:0])
+	}
+	// For buffers outside our desired size range, let them be garbage collected
 }
 
 // Global shared buffer pool for all connections

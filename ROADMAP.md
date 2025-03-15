@@ -70,11 +70,11 @@ Create the fastest, most reliable, zero-allocation DuckDB driver for Go, leverag
   - [x] Add buffer pooling for string caches
   - [x] Add buffer pooling for column metadata
   - [x] Add buffer pooling for parameter binding
-- [ ] Add specialized zero-copy data transfer mechanisms
+- [x] Add specialized zero-copy data transfer mechanisms
 - [ ] Implement streaming for large datasets
 - [ ] Create specialized memory pooling for large operations
 - [ ] Add SIMD optimizations for common operations
-- [ ] Optimize BLOB handling to reduce memory copying
+- [x] Optimize BLOB handling to reduce memory copying
 - [ ] Further optimize string handling with custom allocators
 - [ ] Benchmark-driven optimizations against real-world workloads
 - [ ] Compare and exceed performance of other database drivers

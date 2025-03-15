@@ -656,45 +656,174 @@ func BenchmarkQueryRowsBlob(b *testing.B) {
 	}
 	stmt.Close()
 	
-	// Prepare query statement
-	stmt, err = db.Prepare("SELECT id, data FROM blob_test ORDER BY id LIMIT 100")
-	if err != nil {
-		b.Fatalf("failed to prepare statement: %v", err)
-	}
-	defer stmt.Close()
-
-	// Reset timer for benchmark
-	b.ResetTimer()
-	b.ReportAllocs()
-
-	// Benchmark query with BLOBs
-	for i := 0; i < b.N; i++ {
-		rows, err := stmt.Query()
+	b.Run("ZeroCopyBlobOptimized", func(b *testing.B) {
+		// Prepare query statement
+		stmt, err := db.Prepare("SELECT id, data FROM blob_test ORDER BY id LIMIT 100")
 		if err != nil {
-			b.Fatalf("failed to query: %v", err)
+			b.Fatalf("failed to prepare statement: %v", err)
 		}
-
-		count := 0
-		var id int
-		var data []byte
-		
-		for rows.Next() {
-			if err := rows.Scan(&id, &data); err != nil {
-				rows.Close()
-				b.Fatalf("failed to scan row: %v", err)
+		defer stmt.Close()
+	
+		// Reset timer for benchmark
+		b.ResetTimer()
+		b.ReportAllocs()
+	
+		// Benchmark query with BLOBs using zero-copy optimization
+		for i := 0; i < b.N; i++ {
+			rows, err := stmt.Query()
+			if err != nil {
+				b.Fatalf("failed to query: %v", err)
 			}
-			count++
+	
+			count := 0
+			var id int
+			var data []byte
+			
+			for rows.Next() {
+				if err := rows.Scan(&id, &data); err != nil {
+					rows.Close()
+					b.Fatalf("failed to scan row: %v", err)
+				}
+				
+				// Verify the data is valid but don't use it extensively
+				// to isolate the scanning performance
+				if len(data) == 0 {
+					b.Fatalf("expected non-empty blob")
+				}
+				
+				count++
+			}
+			rows.Close()
+	
+			if err := rows.Err(); err != nil {
+				b.Fatalf("error during row iteration: %v", err)
+			}
+	
+			if count != 100 {
+				b.Fatalf("expected 100 rows, got %d", count)
+			}
 		}
-		rows.Close()
-
-		if err := rows.Err(); err != nil {
-			b.Fatalf("error during row iteration: %v", err)
+	})
+	
+	b.Run("HighAllocationBlobProcessing", func(b *testing.B) {
+		// Prepare query statement - create a new one to avoid any caching effects
+		stmt, err := db.Prepare("SELECT id, data FROM blob_test ORDER BY id LIMIT 100")
+		if err != nil {
+			b.Fatalf("failed to prepare statement: %v", err)
 		}
-
-		if count != 100 {
-			b.Fatalf("expected 100 rows, got %d", count)
+		defer stmt.Close()
+	
+		// Reset timer for benchmark
+		b.ResetTimer()
+		b.ReportAllocs()
+	
+		// Benchmark query with high allocation simulated blob processing
+		for i := 0; i < b.N; i++ {
+			rows, err := stmt.Query()
+			if err != nil {
+				b.Fatalf("failed to query: %v", err)
+			}
+	
+			count := 0
+			var id int
+			var data []byte
+			
+			// Accumulate all blobs to simulate real-world usage where
+			// you'd actually do something with the data
+			allBlobs := make([][]byte, 0, 100)
+			
+			for rows.Next() {
+				if err := rows.Scan(&id, &data); err != nil {
+					rows.Close()
+					b.Fatalf("failed to scan row: %v", err)
+				}
+				
+				// Create a new copy to simulate processing the blob data
+				// This is the high-allocation path that our optimization targets
+				dataCopy := make([]byte, len(data))
+				copy(dataCopy, data)
+				
+				// Do a simple transformation to prevent optimizer from eliding the copy
+				for i := 0; i < len(dataCopy) && i < 4; i++ {
+					dataCopy[i] = byte(i ^ int(dataCopy[i]))
+				}
+				
+				// Store the processed blob
+				allBlobs = append(allBlobs, dataCopy)
+				
+				count++
+			}
+			rows.Close()
+	
+			if err := rows.Err(); err != nil {
+				b.Fatalf("error during row iteration: %v", err)
+			}
+	
+			if count != 100 {
+				b.Fatalf("expected 100 rows, got %d", count)
+			}
+			
+			// Use the accumulated blobs to prevent compiler optimizations
+			if len(allBlobs) != 100 {
+				b.Fatalf("incorrect blob accumulation")
+			}
 		}
-	}
+	})
+	
+	// Test with repeated queries to measure the impact of buffer pooling
+	b.Run("RepeatedBlobQueries", func(b *testing.B) {
+		// Prepare query statement
+		stmt, err := db.Prepare("SELECT id, data FROM blob_test WHERE id >= ? LIMIT 10")
+		if err != nil {
+			b.Fatalf("failed to prepare statement: %v", err)
+		}
+		defer stmt.Close()
+	
+		// Reset timer for benchmark
+		b.ResetTimer()
+		b.ReportAllocs()
+	
+		// Run many small queries to exercise the buffer pooling
+		for i := 0; i < b.N; i++ {
+			// Query different segments to avoid query result caching
+			startID := i % 90
+			
+			rows, err := stmt.Query(startID)
+			if err != nil {
+				b.Fatalf("failed to query: %v", err)
+			}
+	
+			var id int
+			var data []byte
+			count := 0
+			
+			for rows.Next() {
+				if err := rows.Scan(&id, &data); err != nil {
+					rows.Close()
+					b.Fatalf("failed to scan row: %v", err)
+				}
+				
+				// Just verify correct data size based on row pattern
+				expectedSize := 0
+				switch (startID + count) % 3 {
+				case 0:
+					expectedSize = len(smallBlob)
+				case 1:
+					expectedSize = len(mediumBlob)
+				case 2:
+					expectedSize = len(largeBlob)
+				}
+				
+				if expectedSize > 0 && len(data) != expectedSize {
+					b.Fatalf("unexpected data size for id %d: got %d, expected ~%d", 
+						id, len(data), expectedSize)
+				}
+				
+				count++
+			}
+			rows.Close()
+		}
+	})
 }
 
 // BenchmarkQueryRowsNoScan measures just fetching rows without scanning the values

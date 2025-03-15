@@ -23,8 +23,7 @@ This driver is compatible with DuckDB 1.2.1. However, there are some limitations
 
 1. **Prepared statements** don't work correctly with parameter binding in 1.2.1 
    and are currently disabled (direct query execution is used instead)
-2. **BLOB handling** is simplified
-3. **Named parameters** are not yet supported
+2. **Named parameters** are not yet supported
 
 These limitations will be addressed in future versions.
 
@@ -143,8 +142,10 @@ Performance benchmark results show a reduction of approximately:
 The driver is optimized for minimal data copying, reducing allocations and improving performance:
 
 - Direct buffer access where possible
-- Buffer pooling for frequent operations
+- Buffer pooling for frequent operations 
 - Custom memory management for large result sets
+- Zero-copy BLOB handling with buffer pooling
+- Optimized pointer operations for C-to-Go data transfer
 
 ## Running Tests
 

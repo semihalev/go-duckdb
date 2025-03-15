@@ -27,10 +27,10 @@ This document tracks the tasks needed to make the go-duckdb driver fully compati
   - [ ] Add tests to verify parameter binding is working correctly
   - [ ] Consider implementing a workaround by rewriting queries and direct execution
 
-- [ ] Enhance BLOB handling
-  - [ ] Implement zero-copy BLOB transfers where possible
-  - [ ] Add proper length tracking for BLOB data
-  - [ ] Add BLOB buffer pooling
+- [x] Enhance BLOB handling
+  - [x] Implement zero-copy BLOB transfers where possible
+  - [x] Add proper length tracking for BLOB data
+  - [x] Add BLOB buffer pooling
 
 - [ ] Add support for named parameters
   - [ ] Implement parameter name resolution

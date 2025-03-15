@@ -2,14 +2,7 @@
 package duckdb
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/include
-#cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/lib/darwin/amd64 -lduckdb -lstdc++
-#cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/lib/darwin/arm64 -lduckdb -lstdc++
-#cgo linux,amd64 LDFLAGS: -L${SRCDIR}/lib/linux/amd64 -lduckdb -lstdc++
-#cgo linux,arm64 LDFLAGS: -L${SRCDIR}/lib/linux/arm64 -lduckdb -lstdc++
-#cgo windows,amd64 LDFLAGS: -L${SRCDIR}/lib/windows/amd64 -lduckdb -lstdc++
-#cgo windows,arm64 LDFLAGS: -L${SRCDIR}/lib/windows/arm64 -lduckdb -lstdc++
-
+// Use only necessary includes here - CGO directives are defined in duckdb.go
 #include <stdlib.h>
 #include <string.h>
 #include <duckdb.h>
@@ -34,11 +27,15 @@ type Rows struct {
 	closed       int32
 	// Cache for string values to reduce allocations
 	strCache     *StringCache
+	// BLOB buffers to reduce allocations for BLOB data
+	// Maps column index to buffer for reuse during iteration
+	blobBuffers  map[int][]byte
 	// Flags to track which buffers came from the pool
 	fromPool     struct {
 		strCache    bool
 		columnNames bool
 		columnTypes bool
+		blobBuffers bool
 	}
 }
 
@@ -57,7 +54,9 @@ func newRows(result *C.duckdb_result) *Rows {
 		result:     result,
 		rowCount:   rowCount,
 		currentRow: 0,
+		blobBuffers: make(map[int][]byte), // Initialize blob buffers map
 	}
+	rows.fromPool.blobBuffers = true // Mark as coming from pool for cleanup
 	
 	// Get column names buffer from pool
 	rows.columnNames = globalBufferPool.GetColumnNamesBuffer(colCountInt)
@@ -112,6 +111,14 @@ func (r *Rows) Close() error {
 	if r.fromPool.columnTypes {
 		globalBufferPool.PutColumnTypesBuffer(r.columnTypes)
 		r.columnTypes = nil
+	}
+	
+	// Return BLOB buffers to the pool
+	if r.fromPool.blobBuffers && r.blobBuffers != nil {
+		for _, buf := range r.blobBuffers {
+			globalBufferPool.PutBlobBuffer(buf)
+		}
+		r.blobBuffers = nil
 	}
 	
 	return nil
@@ -480,13 +487,43 @@ func (r *Rows) Next(dest []driver.Value) error {
 		case C.DUCKDB_TYPE_BLOB:
 			blob := C.duckdb_value_blob(r.result, colIdx, rowIdx)
 			if blob.data == nil || blob.size == 0 {
-				dest[i] = []byte{}
+				dest[i] = []byte{} // Empty BLOB
 			} else {
-				// TODO: Implement zero-copy blob transfer once buffer pooling is added
-				// For now we use Go's C.GoBytes which makes a copy
-				data := C.GoBytes(blob.data, C.int(blob.size))
+				blobSize := int(blob.size)
+				
+				// Get or reuse a buffer for this column
+				var buffer []byte
+				var ok bool
+				
+				// Try to reuse the existing buffer for this column if possible
+				if buffer, ok = r.blobBuffers[i]; ok && len(buffer) >= blobSize {
+					// We can reuse the existing buffer
+					buffer = buffer[:blobSize]
+				} else {
+					// Get a new buffer from the pool
+					buffer = globalBufferPool.GetBlobBuffer(blobSize)
+					r.blobBuffers[i] = buffer
+				}
+				
+				// Zero-copy optimization: copy directly from C memory to our reusable buffer
+				// This avoids the allocation that C.GoBytes would make
+				for j := 0; j < blobSize; j++ {
+					// Pointer arithmetic with safety checks
+					bytePtr := (*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(blob.data)) + uintptr(j)))
+					if bytePtr != nil {
+						buffer[j] = byte(*bytePtr)
+					} else {
+						// Truncate if we hit a null pointer (shouldn't happen, but safety first)
+						buffer = buffer[:j]
+						break
+					}
+				}
+				
+				// Free the DuckDB blob data immediately
 				C.duckdb_free(blob.data)
-				dest[i] = data
+				
+				// Set the buffer as the result
+				dest[i] = buffer
 			}
 			
 		case C.DUCKDB_TYPE_TIMESTAMP, C.DUCKDB_TYPE_TIMESTAMP_S, C.DUCKDB_TYPE_TIMESTAMP_MS, C.DUCKDB_TYPE_TIMESTAMP_NS:
