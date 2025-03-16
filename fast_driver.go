@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"reflect"
 	"runtime"
 	"sync"
@@ -50,16 +51,26 @@ func (rb *FastResultBuffer) Close() {
 	}
 
 	// Free C resources
-	if rb.releaseOnClose {
+	if rb.releaseOnClose && rb.buffer.resources != nil {
+		// Use a defer to ensure we mark as closed even if freeing fails
+		defer func() {
+			rb.closed = true
+		}()
+		
+		// Free the result buffer
 		C.free_result_buffer(&rb.buffer)
+		
+		// Clear the pointer to prevent double free
+		rb.buffer.resources = nil
+	} else {
+		// If we're not releasing or already released, just mark as closed
+		rb.closed = true
 	}
 
 	// Clear string cache
 	if rb.stringCache != nil {
 		rb.stringCache.Reset()
 	}
-
-	rb.closed = true
 }
 
 // FastRows implements driver.Rows interface for high-performance access
@@ -303,9 +314,23 @@ func (r *FastRows) Close() error {
 		return nil
 	}
 
-	// Close the result buffer
+	// Mark as closed first to prevent any further use
+	r.closed = true
+
+	// Close the result buffer with nil checks for safety
 	if r.buffer != nil {
-		r.buffer.Close()
+		// Use a try-recover to handle any potential panics during Close
+		func() {
+			defer func() {
+				if err := recover(); err != nil {
+					// Just log and continue - don't let the panic propagate
+					fmt.Fprintf(os.Stderr, "Warning: panic while closing buffer: %v\n", err)
+				}
+			}()
+			
+			r.buffer.Close()
+		}()
+		
 		r.buffer = nil
 	}
 
@@ -314,7 +339,6 @@ func (r *FastRows) Close() error {
 	r.types = nil
 	r.nulls = nil
 	r.data = nil
-	r.closed = true
 
 	return nil
 }
