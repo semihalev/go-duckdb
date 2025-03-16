@@ -4,8 +4,6 @@ package duckdb
 // This file contains the main driver implementation and shared utilities
 
 /*
-// Central definition of CGO flags - these should only be defined once in the entire package
-// to avoid duplicate library linking warnings
 #cgo CFLAGS: -I${SRCDIR}/include
 #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/lib/darwin/amd64 -lduckdb -lstdc++
 #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/lib/darwin/arm64 -lduckdb -lstdc++
@@ -23,8 +21,30 @@ import "C"
 import (
 	"database/sql"
 	"database/sql/driver"
+	"runtime"
 	"sync"
 	"unsafe"
+)
+
+// DuckDB type constants exported for use with PreallocateVectors
+const (
+	DUCKDB_TYPE_INVALID    = 0
+	DUCKDB_TYPE_BOOLEAN    = 1
+	DUCKDB_TYPE_TINYINT    = 2
+	DUCKDB_TYPE_SMALLINT   = 3
+	DUCKDB_TYPE_INTEGER    = 4
+	DUCKDB_TYPE_BIGINT     = 5
+	DUCKDB_TYPE_UTINYINT   = 6
+	DUCKDB_TYPE_USMALLINT  = 7
+	DUCKDB_TYPE_UINTEGER   = 8
+	DUCKDB_TYPE_UBIGINT    = 9
+	DUCKDB_TYPE_FLOAT      = 10
+	DUCKDB_TYPE_DOUBLE     = 11
+	DUCKDB_TYPE_TIMESTAMP  = 12
+	DUCKDB_TYPE_DATE       = 13
+	DUCKDB_TYPE_TIME       = 14
+	DUCKDB_TYPE_VARCHAR    = 15
+	DUCKDB_TYPE_BLOB       = 16
 )
 
 func init() {
@@ -403,6 +423,569 @@ func (p *ResultBufferPool) PutResultSetWrapper(wrapper *ResultSetWrapper) {
 // Global shared buffer pool for all connections
 var globalBufferPool = &ResultBufferPool{
 	sharedStringMap: make(map[string]string, 10000),
+}
+
+// SafeColumnVector provides safe pre-allocated column vector storage for result sets.
+// It uses C-allocated memory to store values, avoiding CGO pointer safety issues
+// and reducing allocations during query execution.
+type SafeColumnVector struct {
+	// Pointer to C-allocated memory to store values
+	cData unsafe.Pointer
+	
+	// Size of the currently used elements (may be less than Capacity)
+	Size int
+	
+	// Total capacity of allocated memory
+	Capacity int
+	
+	// Size in bytes of a single element
+	ElementSize int
+	
+	// DuckDB type of the column
+	DuckDBType int
+	
+	// Track whether the vector has been manually freed
+	freed bool
+}
+
+// AllocSafeVector allocates a new SafeColumnVector with the specified capacity and element size.
+// The memory is allocated on the C heap to avoid CGO pointer safety issues.
+func AllocSafeVector(capacity int, elementSize int, duckDBType int) *SafeColumnVector {
+	if capacity <= 0 || elementSize <= 0 {
+		return nil
+	}
+	
+	// Allocate memory on the C heap
+	totalSize := capacity * elementSize
+	cData := C.malloc(C.size_t(totalSize))
+	if cData == nil {
+		return nil
+	}
+	
+	// Zero-initialize the memory
+	C.memset(cData, 0, C.size_t(totalSize))
+	
+	// Create the safe vector
+	v := &SafeColumnVector{
+		cData:       cData,
+		Size:        0,
+		Capacity:    capacity,
+		ElementSize: elementSize,
+		DuckDBType:  duckDBType,
+		freed:       false,
+	}
+	
+	// Set finalizer to ensure memory is freed when the Go object is garbage collected
+	RegisterVectorFinalizer(v)
+	
+	return v
+}
+
+// RegisterVectorFinalizer sets a finalizer for the SafeColumnVector to ensure C memory is freed
+func RegisterVectorFinalizer(v *SafeColumnVector) {
+	// Add runtime finalizer to free C memory when the Go object is garbage collected
+	runtime.SetFinalizer(v, func(v *SafeColumnVector) {
+		v.Free()
+	})
+}
+
+// Free explicitly frees the C-allocated memory.
+// This should be called when the vector is no longer needed to prevent memory leaks.
+func (v *SafeColumnVector) Free() {
+	if v == nil || v.cData == nil || v.freed {
+		return
+	}
+	
+	// Free the C memory
+	C.free(v.cData)
+	v.cData = nil
+	v.freed = true
+}
+
+// Reset resets the vector to be reused, keeping the allocated memory.
+func (v *SafeColumnVector) Reset() {
+	if v == nil || v.cData == nil || v.freed {
+		return
+	}
+	
+	// Zero out the memory
+	C.memset(v.cData, 0, C.size_t(v.Capacity*v.ElementSize))
+	v.Size = 0
+}
+
+// SetInt8 sets an int8 value at the specified index
+func (v *SafeColumnVector) SetInt8(index int, value int8) {
+	if v == nil || v.cData == nil || v.freed || index >= v.Capacity {
+		return
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index)
+	
+	// Write directly to C memory
+	*(*int8)(unsafe.Pointer(uintptr(v.cData) + offset)) = value
+	
+	// Update size if needed
+	if index >= v.Size {
+		v.Size = index + 1
+	}
+}
+
+// GetInt8 gets an int8 value at the specified index
+func (v *SafeColumnVector) GetInt8(index int) int8 {
+	if v == nil || v.cData == nil || v.freed || index >= v.Size {
+		return 0
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index)
+	
+	// Read directly from C memory
+	return *(*int8)(unsafe.Pointer(uintptr(v.cData) + offset))
+}
+
+// SetInt16 sets an int16 value at the specified index
+func (v *SafeColumnVector) SetInt16(index int, value int16) {
+	if v == nil || v.cData == nil || v.freed || index >= v.Capacity {
+		return
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 2) // int16 is 2 bytes
+	
+	// Write directly to C memory
+	*(*int16)(unsafe.Pointer(uintptr(v.cData) + offset)) = value
+	
+	// Update size if needed
+	if index >= v.Size {
+		v.Size = index + 1
+	}
+}
+
+// GetInt16 gets an int16 value at the specified index
+func (v *SafeColumnVector) GetInt16(index int) int16 {
+	if v == nil || v.cData == nil || v.freed || index >= v.Size {
+		return 0
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 2) // int16 is 2 bytes
+	
+	// Read directly from C memory
+	return *(*int16)(unsafe.Pointer(uintptr(v.cData) + offset))
+}
+
+// SetInt32 sets an int32 value at the specified index
+func (v *SafeColumnVector) SetInt32(index int, value int32) {
+	if v == nil || v.cData == nil || v.freed || index >= v.Capacity {
+		return
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 4) // int32 is 4 bytes
+	
+	// Write directly to C memory
+	*(*int32)(unsafe.Pointer(uintptr(v.cData) + offset)) = value
+	
+	// Update size if needed
+	if index >= v.Size {
+		v.Size = index + 1
+	}
+}
+
+// GetInt32 gets an int32 value at the specified index
+func (v *SafeColumnVector) GetInt32(index int) int32 {
+	if v == nil || v.cData == nil || v.freed || index >= v.Size {
+		return 0
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 4) // int32 is 4 bytes
+	
+	// Read directly from C memory
+	return *(*int32)(unsafe.Pointer(uintptr(v.cData) + offset))
+}
+
+// SetInt64 sets an int64 value at the specified index
+func (v *SafeColumnVector) SetInt64(index int, value int64) {
+	if v == nil || v.cData == nil || v.freed || index >= v.Capacity {
+		return
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 8) // int64 is 8 bytes
+	
+	// Write directly to C memory
+	*(*int64)(unsafe.Pointer(uintptr(v.cData) + offset)) = value
+	
+	// Update size if needed
+	if index >= v.Size {
+		v.Size = index + 1
+	}
+}
+
+// GetInt64 gets an int64 value at the specified index
+func (v *SafeColumnVector) GetInt64(index int) int64 {
+	if v == nil || v.cData == nil || v.freed || index >= v.Size {
+		return 0
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 8) // int64 is 8 bytes
+	
+	// Read directly from C memory
+	return *(*int64)(unsafe.Pointer(uintptr(v.cData) + offset))
+}
+
+// SetUint8 sets a uint8 value at the specified index
+func (v *SafeColumnVector) SetUint8(index int, value uint8) {
+	if v == nil || v.cData == nil || v.freed || index >= v.Capacity {
+		return
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index)
+	
+	// Write directly to C memory
+	*(*uint8)(unsafe.Pointer(uintptr(v.cData) + offset)) = value
+	
+	// Update size if needed
+	if index >= v.Size {
+		v.Size = index + 1
+	}
+}
+
+// GetUint8 gets a uint8 value at the specified index
+func (v *SafeColumnVector) GetUint8(index int) uint8 {
+	if v == nil || v.cData == nil || v.freed || index >= v.Size {
+		return 0
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index)
+	
+	// Read directly from C memory
+	return *(*uint8)(unsafe.Pointer(uintptr(v.cData) + offset))
+}
+
+// SetUint16 sets a uint16 value at the specified index
+func (v *SafeColumnVector) SetUint16(index int, value uint16) {
+	if v == nil || v.cData == nil || v.freed || index >= v.Capacity {
+		return
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 2) // uint16 is 2 bytes
+	
+	// Write directly to C memory
+	*(*uint16)(unsafe.Pointer(uintptr(v.cData) + offset)) = value
+	
+	// Update size if needed
+	if index >= v.Size {
+		v.Size = index + 1
+	}
+}
+
+// GetUint16 gets a uint16 value at the specified index
+func (v *SafeColumnVector) GetUint16(index int) uint16 {
+	if v == nil || v.cData == nil || v.freed || index >= v.Size {
+		return 0
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 2) // uint16 is 2 bytes
+	
+	// Read directly from C memory
+	return *(*uint16)(unsafe.Pointer(uintptr(v.cData) + offset))
+}
+
+// SetUint32 sets a uint32 value at the specified index
+func (v *SafeColumnVector) SetUint32(index int, value uint32) {
+	if v == nil || v.cData == nil || v.freed || index >= v.Capacity {
+		return
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 4) // uint32 is 4 bytes
+	
+	// Write directly to C memory
+	*(*uint32)(unsafe.Pointer(uintptr(v.cData) + offset)) = value
+	
+	// Update size if needed
+	if index >= v.Size {
+		v.Size = index + 1
+	}
+}
+
+// GetUint32 gets a uint32 value at the specified index
+func (v *SafeColumnVector) GetUint32(index int) uint32 {
+	if v == nil || v.cData == nil || v.freed || index >= v.Size {
+		return 0
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 4) // uint32 is 4 bytes
+	
+	// Read directly from C memory
+	return *(*uint32)(unsafe.Pointer(uintptr(v.cData) + offset))
+}
+
+// SetUint64 sets a uint64 value at the specified index
+func (v *SafeColumnVector) SetUint64(index int, value uint64) {
+	if v == nil || v.cData == nil || v.freed || index >= v.Capacity {
+		return
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 8) // uint64 is 8 bytes
+	
+	// Write directly to C memory
+	*(*uint64)(unsafe.Pointer(uintptr(v.cData) + offset)) = value
+	
+	// Update size if needed
+	if index >= v.Size {
+		v.Size = index + 1
+	}
+}
+
+// GetUint64 gets a uint64 value at the specified index
+func (v *SafeColumnVector) GetUint64(index int) uint64 {
+	if v == nil || v.cData == nil || v.freed || index >= v.Size {
+		return 0
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 8) // uint64 is 8 bytes
+	
+	// Read directly from C memory
+	return *(*uint64)(unsafe.Pointer(uintptr(v.cData) + offset))
+}
+
+// SetFloat32 sets a float32 value at the specified index
+func (v *SafeColumnVector) SetFloat32(index int, value float32) {
+	if v == nil || v.cData == nil || v.freed || index >= v.Capacity {
+		return
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 4) // float32 is 4 bytes
+	
+	// Write directly to C memory
+	*(*float32)(unsafe.Pointer(uintptr(v.cData) + offset)) = value
+	
+	// Update size if needed
+	if index >= v.Size {
+		v.Size = index + 1
+	}
+}
+
+// GetFloat32 gets a float32 value at the specified index
+func (v *SafeColumnVector) GetFloat32(index int) float32 {
+	if v == nil || v.cData == nil || v.freed || index >= v.Size {
+		return 0
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 4) // float32 is 4 bytes
+	
+	// Read directly from C memory
+	return *(*float32)(unsafe.Pointer(uintptr(v.cData) + offset))
+}
+
+// SetFloat64 sets a float64 value at the specified index
+func (v *SafeColumnVector) SetFloat64(index int, value float64) {
+	if v == nil || v.cData == nil || v.freed || index >= v.Capacity {
+		return
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 8) // float64 is 8 bytes
+	
+	// Write directly to C memory
+	*(*float64)(unsafe.Pointer(uintptr(v.cData) + offset)) = value
+	
+	// Update size if needed
+	if index >= v.Size {
+		v.Size = index + 1
+	}
+}
+
+// GetFloat64 gets a float64 value at the specified index
+func (v *SafeColumnVector) GetFloat64(index int) float64 {
+	if v == nil || v.cData == nil || v.freed || index >= v.Size {
+		return 0
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index * 8) // float64 is 8 bytes
+	
+	// Read directly from C memory
+	return *(*float64)(unsafe.Pointer(uintptr(v.cData) + offset))
+}
+
+// SetBool sets a bool value at the specified index
+func (v *SafeColumnVector) SetBool(index int, value bool) {
+	if v == nil || v.cData == nil || v.freed || index >= v.Capacity {
+		return
+	}
+	
+	// Convert bool to byte (0 or 1)
+	var byteVal byte
+	if value {
+		byteVal = 1
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index)
+	
+	// Write directly to C memory
+	*(*byte)(unsafe.Pointer(uintptr(v.cData) + offset)) = byteVal
+	
+	// Update size if needed
+	if index >= v.Size {
+		v.Size = index + 1
+	}
+}
+
+// GetBool gets a bool value at the specified index
+func (v *SafeColumnVector) GetBool(index int) bool {
+	if v == nil || v.cData == nil || v.freed || index >= v.Size {
+		return false
+	}
+	
+	// Calculate the offset for this index
+	offset := uintptr(index)
+	
+	// Read directly from C memory
+	byteVal := *(*byte)(unsafe.Pointer(uintptr(v.cData) + offset))
+	
+	// Convert byte to bool
+	return byteVal != 0
+}
+
+// Store vectors by column index and DuckDB type
+var vectorsByType = make(map[int]map[int]*SafeColumnVector)
+var vectorsLock sync.RWMutex
+
+// PreallocateVectors pre-allocates column vectors for specific types and sizes.
+// This reduces allocations during query execution.
+// Parameters:
+//   - rowCapacity: number of rows to allocate space for
+//   - types: array of DuckDB column types
+//   - sizes: array of element sizes for each type
+func PreallocateVectors(rowCapacity int, types []int, sizes []int) {
+	if rowCapacity <= 0 || len(types) != len(sizes) || len(types) == 0 {
+		return
+	}
+	
+	vectorsLock.Lock()
+	defer vectorsLock.Unlock()
+	
+	// Allocate vectors for each type
+	for i, duckDBType := range types {
+		elementSize := sizes[i]
+		if elementSize <= 0 {
+			continue
+		}
+		
+		// Create map for this type if it doesn't exist
+		if vectorsByType[duckDBType] == nil {
+			vectorsByType[duckDBType] = make(map[int]*SafeColumnVector)
+		}
+		
+		// Either create a new vector or reset existing one
+		vector := vectorsByType[duckDBType][elementSize]
+		if vector == nil {
+			// Allocate with some extra capacity to reduce future allocations
+			effectiveCapacity := rowCapacity + 50
+			vector = AllocSafeVector(effectiveCapacity, elementSize, duckDBType)
+			if vector != nil {
+				vectorsByType[duckDBType][elementSize] = vector
+			}
+		} else {
+			// Reset existing vector for reuse
+			vector.Reset()
+		}
+	}
+	
+	// Also pre-allocate for standard sizes to cover common cases
+	standardSizes := map[int]int{
+		DUCKDB_TYPE_BOOLEAN:  1,  // bool is 1 byte
+		DUCKDB_TYPE_TINYINT:  1,  // int8 is 1 byte
+		DUCKDB_TYPE_SMALLINT: 2,  // int16 is 2 bytes  
+		DUCKDB_TYPE_INTEGER:  4,  // int32 is 4 bytes
+		DUCKDB_TYPE_BIGINT:   8,  // int64 is 8 bytes
+		DUCKDB_TYPE_FLOAT:    4,  // float32 is 4 bytes
+		DUCKDB_TYPE_DOUBLE:   8,  // float64 is 8 bytes
+	}
+	
+	// Ensure we have vectors for standard sizes
+	for duckDBType, elementSize := range standardSizes {
+		if vectorsByType[duckDBType] == nil {
+			vectorsByType[duckDBType] = make(map[int]*SafeColumnVector)
+		}
+		
+		if vectorsByType[duckDBType][elementSize] == nil {
+			effectiveCapacity := rowCapacity + 50
+			vector := AllocSafeVector(effectiveCapacity, elementSize, duckDBType)
+			if vector != nil {
+				vectorsByType[duckDBType][elementSize] = vector
+			}
+		} else {
+			// Reset for reuse
+			vectorsByType[duckDBType][elementSize].Reset()
+		}
+	}
+}
+
+// GetPreallocatedVector retrieves a pre-allocated vector for a specific type and element size.
+// Returns nil if no vector is available.
+func GetPreallocatedVector(duckDBType int, elementSize int) *SafeColumnVector {
+	vectorsLock.RLock()
+	defer vectorsLock.RUnlock()
+	
+	// Check if we have a vector for this type and size
+	if typeMap, ok := vectorsByType[duckDBType]; ok {
+		if vector, ok := typeMap[elementSize]; ok {
+			return vector
+		}
+	}
+	
+	return nil
+}
+
+// storeInSafeVector stores a value in a safe column vector.
+// This is used by the rows.Next method to store values in pre-allocated vectors.
+func storeInSafeVector(safeVector *SafeColumnVector, rowIdx int, val interface{}) {
+	if safeVector == nil || rowIdx < 0 {
+		return
+	}
+	
+	// Store value based on its type
+	switch v := val.(type) {
+	case int8:
+		safeVector.SetInt8(rowIdx, v)
+	case int16:
+		safeVector.SetInt16(rowIdx, v)
+	case int32:
+		safeVector.SetInt32(rowIdx, v)
+	case int64:
+		safeVector.SetInt64(rowIdx, v)
+	case uint8:
+		safeVector.SetUint8(rowIdx, v)
+	case uint16:
+		safeVector.SetUint16(rowIdx, v)
+	case uint32:
+		safeVector.SetUint32(rowIdx, v)
+	case uint64:
+		safeVector.SetUint64(rowIdx, v)
+	case float32:
+		safeVector.SetFloat32(rowIdx, v)
+	case float64:
+		safeVector.SetFloat64(rowIdx, v)
+	case bool:
+		safeVector.SetBool(rowIdx, v)
+	}
 }
 
 // Driver implements the database/sql/driver.Driver interface.

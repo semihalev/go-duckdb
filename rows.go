@@ -30,14 +30,18 @@ type Rows struct {
 	// BLOB buffers to reduce allocations for BLOB data
 	// Maps column index to buffer for reuse during iteration
 	blobBuffers  map[int][]byte
+	// Column vectors for pre-allocated storage
+	// Maps column index to vector for reuse
+	columnVectors map[int]*SafeColumnVector
 	// Result wrapper for pooled results
 	resultWrapper *ResultSetWrapper
 	// Flags to track which buffers came from the pool
 	fromPool     struct {
-		strCache    bool
-		columnNames bool
-		columnTypes bool
-		blobBuffers bool
+		strCache      bool
+		columnNames   bool
+		columnTypes   bool
+		blobBuffers   bool
+		columnVectors bool
 		resultWrapper bool
 	}
 }
@@ -54,12 +58,14 @@ func newRows(result *C.duckdb_result) *Rows {
 	
 	// Create a new rows instance with pooled buffers
 	rows := &Rows{
-		result:     result,
-		rowCount:   rowCount,
-		currentRow: 0,
-		blobBuffers: make(map[int][]byte), // Initialize blob buffers map
+		result:        result,
+		rowCount:      rowCount,
+		currentRow:    0,
+		blobBuffers:   make(map[int][]byte),     // Initialize blob buffers map
+		columnVectors: make(map[int]*SafeColumnVector), // Initialize column vectors map
 	}
-	rows.fromPool.blobBuffers = true // Mark as coming from pool for cleanup
+	rows.fromPool.blobBuffers = true    // Mark as coming from pool for cleanup
+	rows.fromPool.columnVectors = true  // Mark as coming from pool for cleanup
 	
 	// Get column names buffer from pool
 	rows.columnNames = globalBufferPool.GetColumnNamesBuffer(colCountInt)
@@ -105,16 +111,18 @@ func newRowsWithWrapper(wrapper *ResultSetWrapper) *Rows {
 	
 	// Create a new rows instance with pooled resources
 	rows := &Rows{
-		result:       &wrapper.result, // Store a pointer to the result inside the wrapper
-		resultWrapper: wrapper,        // Store the wrapper for later return to pool
-		rowCount:     rowCount,
-		currentRow:   0,
-		blobBuffers:  make(map[int][]byte), // Initialize blob buffers map
+		result:        &wrapper.result, // Store a pointer to the result inside the wrapper
+		resultWrapper: wrapper,         // Store the wrapper for later return to pool
+		rowCount:      rowCount,
+		currentRow:    0,
+		blobBuffers:   make(map[int][]byte),     // Initialize blob buffers map
+		columnVectors: make(map[int]*SafeColumnVector), // Initialize column vectors map
 	}
 	
 	// Mark everything as coming from pool for proper cleanup
 	rows.fromPool.resultWrapper = true
 	rows.fromPool.blobBuffers = true
+	rows.fromPool.columnVectors = true
 	
 	// Get column names buffer from pool
 	rows.columnNames = globalBufferPool.GetColumnNamesBuffer(colCountInt)
@@ -181,6 +189,16 @@ func (r *Rows) Close() error {
 		r.blobBuffers = nil
 	}
 	
+	// Reset column vectors for reuse
+	if r.fromPool.columnVectors && r.columnVectors != nil {
+		for _, vec := range r.columnVectors {
+			if vec != nil {
+				vec.Reset()
+			}
+		}
+		r.columnVectors = nil
+	}
+	
 	// If we have a result wrapper, return it to the pool
 	// This will handle freeing the C resources
 	if r.fromPool.resultWrapper && r.resultWrapper != nil {
@@ -214,6 +232,10 @@ type StringCache struct {
 	// Max buffer size to prevent unbounded growth
 	maxBufferSize int
 	
+	// String column vectors for reuse
+	// For most common string sizes
+	stringVectors map[int]*SafeColumnVector
+	
 	// Statistics for monitoring
 	hits   int
 	misses int
@@ -234,10 +256,11 @@ func NewStringCache(columns int) *StringCache {
 	}
 	
 	return &StringCache{
-		columnValues:  make([]string, columns),
-		internMap:     make(map[string]string, 1024), // Start with capacity for 1024 unique strings
-		buffers:       buffers,
-		maxBufferSize: 4 * 1024 * 1024,            // Max 4MB buffer size
+		columnValues:   make([]string, columns),
+		internMap:      make(map[string]string, 1024), // Start with capacity for 1024 unique strings
+		buffers:        buffers,
+		maxBufferSize:  4 * 1024 * 1024,            // Max 4MB buffer size
+		stringVectors:  make(map[int]*SafeColumnVector), // For string reuse
 		useSharedStringMap: true,                  // Enable shared string map by default
 	}
 }
@@ -578,6 +601,13 @@ func (sc *StringCache) Reset() {
 		
 		sc.internMap = newMap
 		
+		// Reset string vectors if present
+		for _, vec := range sc.stringVectors {
+			if vec != nil {
+				vec.Reset()
+			}
+		}
+		
 		// Keep stats for monitoring but reset counters
 		totalHits := sc.hits
 		totalMisses := sc.misses
@@ -670,8 +700,24 @@ func (r *Rows) Next(dest []driver.Value) error {
 		colIdx := C.idx_t(i)
 		rowIdx := r.currentRow
 		
+		// Check for NULL values using the safe approach
+		if r.result == nil {
+			dest[i] = nil
+			continue
+		}
+		
+		// Get a pointer to the result structure
+		var resultPtr *C.duckdb_result
+		if r.resultWrapper != nil {
+			// Use the address of the result in the wrapper
+			resultPtr = &r.resultWrapper.result
+		} else {
+			// Use the existing pointer
+			resultPtr = r.result
+		}
+		
 		// Check for NULL values
-		isNull := C.duckdb_value_is_null(r.result, colIdx, rowIdx)
+		isNull := C.duckdb_value_is_null(resultPtr, colIdx, rowIdx)
 		if cBoolToGo(isNull) {
 			dest[i] = nil
 			continue
@@ -682,51 +728,51 @@ func (r *Rows) Next(dest []driver.Value) error {
 		switch colType {
 		case C.DUCKDB_TYPE_BOOLEAN:
 			// Fixed boolean handling - correct conversion from DuckDB bool to Go bool
-			val := C.duckdb_value_boolean(r.result, colIdx, rowIdx)
+			val := C.duckdb_value_boolean(resultPtr, colIdx, rowIdx)
 			dest[i] = cBoolToGo(val)
 			
 		case C.DUCKDB_TYPE_TINYINT:
-			val := C.duckdb_value_int8(r.result, colIdx, rowIdx)
+			val := C.duckdb_value_int8(resultPtr, colIdx, rowIdx)
 			dest[i] = int8(val)
 			
 		case C.DUCKDB_TYPE_SMALLINT:
-			val := C.duckdb_value_int16(r.result, colIdx, rowIdx)
+			val := C.duckdb_value_int16(resultPtr, colIdx, rowIdx)
 			dest[i] = int16(val)
 			
 		case C.DUCKDB_TYPE_INTEGER:
-			val := C.duckdb_value_int32(r.result, colIdx, rowIdx)
+			val := C.duckdb_value_int32(resultPtr, colIdx, rowIdx)
 			dest[i] = int32(val)
 			
 		case C.DUCKDB_TYPE_BIGINT:
-			val := C.duckdb_value_int64(r.result, colIdx, rowIdx)
+			val := C.duckdb_value_int64(resultPtr, colIdx, rowIdx)
 			dest[i] = int64(val)
 			
 		case C.DUCKDB_TYPE_UTINYINT:
-			val := C.duckdb_value_uint8(r.result, colIdx, rowIdx)
+			val := C.duckdb_value_uint8(resultPtr, colIdx, rowIdx)
 			dest[i] = uint8(val)
 			
 		case C.DUCKDB_TYPE_USMALLINT:
-			val := C.duckdb_value_uint16(r.result, colIdx, rowIdx)
+			val := C.duckdb_value_uint16(resultPtr, colIdx, rowIdx)
 			dest[i] = uint16(val)
 			
 		case C.DUCKDB_TYPE_UINTEGER:
-			val := C.duckdb_value_uint32(r.result, colIdx, rowIdx)
+			val := C.duckdb_value_uint32(resultPtr, colIdx, rowIdx)
 			dest[i] = uint32(val)
 			
 		case C.DUCKDB_TYPE_UBIGINT:
-			val := C.duckdb_value_uint64(r.result, colIdx, rowIdx)
+			val := C.duckdb_value_uint64(resultPtr, colIdx, rowIdx)
 			dest[i] = uint64(val)
 			
 		case C.DUCKDB_TYPE_FLOAT:
-			val := C.duckdb_value_float(r.result, colIdx, rowIdx)
+			val := C.duckdb_value_float(resultPtr, colIdx, rowIdx)
 			dest[i] = float32(val)
 			
 		case C.DUCKDB_TYPE_DOUBLE:
-			val := C.duckdb_value_double(r.result, colIdx, rowIdx)
+			val := C.duckdb_value_double(resultPtr, colIdx, rowIdx)
 			dest[i] = float64(val)
 			
 		case C.DUCKDB_TYPE_VARCHAR:
-			cstr := C.duckdb_value_varchar(r.result, colIdx, rowIdx)
+			cstr := C.duckdb_value_varchar(resultPtr, colIdx, rowIdx)
 			if cstr == nil {
 				dest[i] = ""
 			} else {
@@ -742,7 +788,7 @@ func (r *Rows) Next(dest []driver.Value) error {
 			}
 			
 		case C.DUCKDB_TYPE_BLOB:
-			blob := C.duckdb_value_blob(r.result, colIdx, rowIdx)
+			blob := C.duckdb_value_blob(resultPtr, colIdx, rowIdx)
 			if blob.data == nil || blob.size == 0 {
 				dest[i] = []byte{} // Empty BLOB
 			} else {
@@ -762,18 +808,10 @@ func (r *Rows) Next(dest []driver.Value) error {
 					r.blobBuffers[i] = buffer
 				}
 				
-				// Zero-copy optimization: copy directly from C memory to our reusable buffer
-				// This avoids the allocation that C.GoBytes would make
-				for j := 0; j < blobSize; j++ {
-					// Pointer arithmetic with safety checks
-					bytePtr := (*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(blob.data)) + uintptr(j)))
-					if bytePtr != nil {
-						buffer[j] = byte(*bytePtr)
-					} else {
-						// Truncate if we hit a null pointer (shouldn't happen, but safety first)
-						buffer = buffer[:j]
-						break
-					}
+				// Copy the blob data safely
+				if blobSize > 0 {
+					// Use memcpy directly for efficiency
+					C.memcpy(unsafe.Pointer(&buffer[0]), unsafe.Pointer(blob.data), C.size_t(blobSize))
 				}
 				
 				// Free the DuckDB blob data immediately
@@ -785,19 +823,19 @@ func (r *Rows) Next(dest []driver.Value) error {
 			
 		case C.DUCKDB_TYPE_TIMESTAMP, C.DUCKDB_TYPE_TIMESTAMP_S, C.DUCKDB_TYPE_TIMESTAMP_MS, C.DUCKDB_TYPE_TIMESTAMP_NS:
 			// Handle timestamp (microseconds since 1970-01-01)
-			ts := C.duckdb_value_timestamp(r.result, colIdx, rowIdx)
+			ts := C.duckdb_value_timestamp(resultPtr, colIdx, rowIdx)
 			micros := int64(ts.micros)
 			dest[i] = time.Unix(micros/1000000, (micros%1000000)*1000)
 			
 		case C.DUCKDB_TYPE_DATE:
 			// Handle date (days since 1970-01-01)
-			date := C.duckdb_value_date(r.result, colIdx, rowIdx)
+			date := C.duckdb_value_date(resultPtr, colIdx, rowIdx)
 			days := int64(date.days)
 			dest[i] = time.Unix(days*24*60*60, 0).UTC()
 			
 		case C.DUCKDB_TYPE_TIME:
 			// Handle time (microseconds since 00:00:00)
-			timeVal := C.duckdb_value_time(r.result, colIdx, rowIdx)
+			timeVal := C.duckdb_value_time(resultPtr, colIdx, rowIdx)
 			micros := int64(timeVal.micros)
 			seconds := micros / 1000000
 			nanos := (micros % 1000000) * 1000
@@ -812,7 +850,7 @@ func (r *Rows) Next(dest []driver.Value) error {
 			
 		default:
 			// For other types, convert to string with optimized handling
-			cstr := C.duckdb_value_varchar(r.result, colIdx, rowIdx)
+			cstr := C.duckdb_value_varchar(resultPtr, colIdx, rowIdx)
 			if cstr == nil {
 				dest[i] = ""
 			} else {
@@ -821,6 +859,13 @@ func (r *Rows) Next(dest []driver.Value) error {
 				C.duckdb_free(unsafe.Pointer(cstr))
 			}
 		}
+		
+
+		// For numeric types, reuse the value we already have
+		// No need to do additional allocations for these types
+
+
+
 	}
 	
 	// Adaptive cache optimization
