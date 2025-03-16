@@ -55,6 +55,9 @@ typedef struct {
     // For memory cleanup
     void** resources;
     int32_t resource_count;
+    
+    // Reference counting for shared buffer management
+    int ref_count;
 } result_buffer_t;
 
 // Execute a query and store the entire result set in a single operation
@@ -67,5 +70,9 @@ int execute_prepared_vectorized(duckdb_prepared_statement statement,
 
 // Clean up all resources associated with a result buffer
 void free_result_buffer(result_buffer_t* buffer);
+
+// Reference counting functions for safer resource management
+void increase_buffer_ref(result_buffer_t* buffer);
+void decrease_buffer_ref(result_buffer_t* buffer);
 
 #endif /* DUCKDB_GO_ADAPTER_H */

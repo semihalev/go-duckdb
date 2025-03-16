@@ -189,6 +189,24 @@ static int process_timestamp_column(duckdb_result* result, int32_t col, int64_t 
     return 1;
 }
 
+/**
+ * Reference counting functions for safer resource management
+ */
+void increase_buffer_ref(result_buffer_t* buffer) {
+    if (!buffer) return;
+    buffer->ref_count++;
+}
+
+void decrease_buffer_ref(result_buffer_t* buffer) {
+    if (!buffer) return;
+    if (buffer->ref_count > 0) {
+        buffer->ref_count--;
+        if (buffer->ref_count == 0) {
+            free_result_buffer(buffer);
+        }
+    }
+}
+
 int execute_query_vectorized(duckdb_connection connection, const char* query, result_buffer_t* buffer) {
     if (!connection || !query || !buffer) {
         return 0; // Invalid parameters
@@ -196,6 +214,9 @@ int execute_query_vectorized(duckdb_connection connection, const char* query, re
     
     // Zero initialize the buffer
     memset(buffer, 0, sizeof(result_buffer_t));
+    
+    // Initialize reference count to 1
+    buffer->ref_count = 1;
     
     // Execute the query
     duckdb_result result;
@@ -627,6 +648,9 @@ int execute_prepared_vectorized(duckdb_prepared_statement statement,
     // Zero initialize the buffer
     memset(buffer, 0, sizeof(result_buffer_t));
     
+    // Initialize reference count to 1
+    buffer->ref_count = 1;
+    
     // Execute the prepared statement (parameters are already bound)
     duckdb_result result;
     if (duckdb_execute_prepared(statement, &result) == DuckDBError) {
@@ -706,7 +730,17 @@ int execute_prepared_vectorized(duckdb_prepared_statement statement,
 /**
  * Clean up all resources associated with a result buffer
  * This should be called when the result set is no longer needed
+ * With reference counting, it now delegates to decrease_buffer_ref
  */
 void free_result_buffer(result_buffer_t* buffer) {
-    destroy_result_buffer(buffer);
+    if (!buffer) return;
+    
+    // If reference count is disabled (0) or this is the last reference,
+    // actually destroy the buffer
+    if (buffer->ref_count <= 1) {
+        destroy_result_buffer(buffer);
+    } else {
+        // Otherwise just decrease the reference count
+        buffer->ref_count--;
+    }
 }

@@ -15,6 +15,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"io"
+	"runtime"
 	"time"
 	"unsafe"
 )
@@ -44,12 +45,12 @@ func (conn *Connection) fastExecDirect(query string) (driver.Result, error) {
 	cQuery := cString(query)
 	defer freeString(cQuery)
 
-	// Initialize result buffer
-	var buffer C.result_buffer_t
+	// Get buffer from pool
+	buffer := GetBuffer()
+	defer PutBuffer(buffer)
 
 	// Execute query with vectorized C adapter
-	result := C.execute_query_vectorized(*conn.conn, cQuery, &buffer)
-	defer C.free_result_buffer(&buffer)
+	result := C.execute_query_vectorized(*conn.conn, cQuery, buffer)
 
 	if result == 0 {
 		return nil, fmt.Errorf("failed to execute query: %s", C.GoString(buffer.error_message))
@@ -117,17 +118,20 @@ func (conn *Connection) FastQuery(query string) (driver.Rows, error) {
 	cQuery := cString(query)
 	defer freeString(cQuery)
 
-	// Initialize result buffer
-	var buffer C.result_buffer_t
+	// Get buffer from pool
+	buffer := GetBuffer()
 
 	// Execute query with vectorized C adapter
-	result := C.execute_query_vectorized(*conn.conn, cQuery, &buffer)
+	result := C.execute_query_vectorized(*conn.conn, cQuery, buffer)
 	if result == 0 {
+		// Return buffer to pool on error
+		PutBuffer(buffer)
 		return nil, fmt.Errorf("failed to execute query: %s", C.GoString(buffer.error_message))
 	}
 
 	// Create FastRows from buffer and return
-	return newFastRowsFromBuffer(&buffer), nil
+	// The buffer's ownership is transferred to FastRows
+	return newFastRowsFromBuffer(buffer), nil
 }
 
 // FastStmt is a prepared statement for the fast driver.
@@ -216,17 +220,20 @@ func (stmt *FastStmt) ExecuteFast(args ...interface{}) (driver.Rows, error) {
 		return nil, err
 	}
 
-	// Initialize result buffer
-	var buffer C.result_buffer_t
+	// Get buffer from pool
+	buffer := GetBuffer()
 
 	// Execute prepared statement with vectorized C adapter
-	result := C.execute_prepared_vectorized(*stmt.stmt, &buffer)
+	result := C.execute_prepared_vectorized(*stmt.stmt, buffer)
 	if result == 0 {
+		// Return buffer to pool on error
+		PutBuffer(buffer)
 		return nil, fmt.Errorf("failed to execute statement: %s", C.GoString(buffer.error_message))
 	}
 
 	// Create FastRows from buffer and return
-	return newFastRowsFromBuffer(&buffer), nil
+	// The buffer's ownership is transferred to FastRows
+	return newFastRowsFromBuffer(buffer), nil
 }
 
 // ExecuteWithResult executes the prepared statement and returns a Result with affected rows.
@@ -249,12 +256,12 @@ func (stmt *FastStmt) ExecuteWithResult(args ...interface{}) (driver.Result, err
 		return nil, err
 	}
 
-	// Initialize result buffer
-	var buffer C.result_buffer_t
+	// Get buffer from pool
+	buffer := GetBuffer()
+	defer PutBuffer(buffer)
 
 	// Execute prepared statement with vectorized C adapter
-	result := C.execute_prepared_vectorized(*stmt.stmt, &buffer)
-	defer C.free_result_buffer(&buffer)
+	result := C.execute_prepared_vectorized(*stmt.stmt, buffer)
 
 	if result == 0 {
 		return nil, fmt.Errorf("failed to execute statement: %s", C.GoString(buffer.error_message))
@@ -410,14 +417,26 @@ func newFastRowsFromBuffer(buffer *C.result_buffer_t) *FastRows {
 		columnNames[i] = C.GoString(colInfo.name)
 	}
 
-	// Create and return the rows
-	return &FastRows{
+	// Buffer already has a reference count of 1 from GetBuffer()
+
+	// Create rows and setup finalizer to ensure cleanup
+	rows := &FastRows{
 		buffer:      buffer,
 		columnCount: columnCount,
 		rowCount:    rowCount,
 		currentRow:  0,
 		columnNames: columnNames,
 	}
+
+	// Add runtime finalizer to ensure buffer cleanup even if Close() is not called
+	runtime.SetFinalizer(rows, finalizeRows)
+
+	return rows
+}
+
+// finalizeRows is called by the garbage collector to ensure the buffer is released
+func finalizeRows(rows *FastRows) {
+	rows.Close()
 }
 
 // Columns returns the names of the columns.
@@ -431,10 +450,15 @@ func (r *FastRows) Close() error {
 		return nil
 	}
 
-	// Free the buffer resources but avoid double-freeing resources
-	// To avoid segfault, we'll just mark as closed and let GC handle it
-	r.buffer = nil
+	// Return buffer to pool
+	if r.buffer != nil {
+		PutBuffer(r.buffer)
+		r.buffer = nil
+	}
+
+	// Mark as closed and remove finalizer
 	r.closed = true
+	runtime.SetFinalizer(r, nil)
 	return nil
 }
 
