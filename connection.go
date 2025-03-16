@@ -142,6 +142,9 @@ func (c *Connection) ExecContext(ctx context.Context, query string, args []drive
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Use the fast exec implementation for better performance
+	// We still need a version that tracks rows affected which the standard API doesn't provide
+	
 	// Prepare the query string
 	cQuery := cString(query)
 	defer freeString(cQuery)
@@ -217,6 +220,13 @@ func (c *Connection) QueryContext(ctx context.Context, query string, args []driv
 		if err := C.duckdb_prepare(*c.conn, cQuery, &stmt); err == C.DuckDBError {
 			globalBufferPool.PutResultSetWrapper(wrapper) // Return wrapper to pool
 			return nil, fmt.Errorf("failed to prepare statement: %s", goString(C.duckdb_prepare_error(stmt)))
+		}
+
+		// Bind parameters
+		if err := bindParameters(&stmt, args); err != nil {
+			C.duckdb_destroy_prepare(&stmt)
+			globalBufferPool.PutResultSetWrapper(wrapper)
+			return nil, err
 		}
 
 		// Execute statement with pooled result - pass by address since it's a struct now

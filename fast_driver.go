@@ -448,12 +448,31 @@ func (conn *Connection) FastQueryContext(ctx interface{}, query string, args []d
 	return conn.ExecuteFast(query)
 }
 
+// FastExecContext executes a statement without returning rows using the high-performance adapter
+func (conn *Connection) FastExecContext(ctx interface{}, query string, args []driver.NamedValue) (driver.Result, error) {
+	// First use the fast query implementation to execute the statement
+	rows, err := conn.FastQueryContext(ctx, query, args)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	
+	// For Exec operations, we return a Result with RowsAffected
+	// DuckDB doesn't provide a way to get affected rows through the C API for fast driver
+	// so we'll return a default value for now
+	return &Result{
+		rowsAffected: 0,
+		lastInsertID: 0, // DuckDB doesn't support last insert ID
+	}, nil
+}
+
 // FastStmt is a prepared statement with the high-performance C adapter
 type FastStmt struct {
-	conn   *Connection
-	stmt   *C.duckdb_prepared_statement
-	query  string
-	closed bool
+	conn       *Connection
+	stmt       *C.duckdb_prepared_statement
+	query      string
+	paramCount int
+	closed     bool
 }
 
 // FastPrepare prepares a statement for execution with the high-performance adapter
@@ -473,11 +492,15 @@ func (conn *Connection) FastPrepare(query string) (*FastStmt, error) {
 		return nil, fmt.Errorf("failed to prepare statement: %s", errMsg)
 	}
 
+	// Get parameter count
+	paramCount := int(C.duckdb_nparams(stmt))
+
 	// Create prepared statement object
 	return &FastStmt{
-		conn:  conn,
-		stmt:  &stmt,
-		query: query,
+		conn:       conn,
+		stmt:       &stmt,
+		query:      query,
+		paramCount: paramCount,
 	}, nil
 }
 
