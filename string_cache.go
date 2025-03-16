@@ -19,51 +19,59 @@ type StringCacher interface {
 	GetFromCString(colIdx int, cstr *C.char, length C.size_t) string
 	GetDedupString(value string) string
 	Reset()
-	TuneCache()
 }
 
-// OptimizedStringCache is a high-performance string cache implementation
+// StringCache is a high-performance string cache implementation
 // that balances CPU performance with memory optimization.
-type OptimizedStringCache struct {
+type StringCache struct {
 	// Column-specific caches for quick access by column index
 	columnValues []string
 
-	// Tiered caching strategy based on string length
-	smallStrings  map[string]string // For strings < 64 bytes
-	mediumStrings sync.Map          // For strings < 1024 bytes, thread-safe
+	// Simplified string intern map - used only for strings under the threshold
+	// This dramatically reduces the map size while still capturing common strings
+	internMap map[string]string
 
-	// Single reusable buffer for string conversion
+	// C string pointer cache - maps C string pointer addresses to Go strings
+	// This avoids repeated conversions of the same C string
+	cStringMap map[uintptr]string
+
+	// Critical section mutex - only needed for complex operations
+	// Most operations are lock-free for performance
+	mu sync.Mutex
+
+	// Single large buffer for string conversion to avoid allocations
+	// Using a single buffer and focused copy operations is simpler/faster
 	buffer []byte
 
 	// Size thresholds for different handling paths
-	smallStringThreshold  int
-	mediumStringThreshold int
+	// Small strings use direct interning, large use C.GoString
+	smallStringThreshold int
+	largeStringThreshold int
 
-	// Flag indicating whether this cache uses the global string map
+	// Global string map usage flag
 	useSharedStringMap bool
 
 	// Statistics for monitoring
 	hits   int
 	misses int
-
-	// Mutex for buffer access
-	mu sync.Mutex
+	cHits  int // C string cache hits
 }
 
-// NewOptimizedStringCache creates a new optimized string cache with improved performance.
-func NewOptimizedStringCache(columns int) *OptimizedStringCache {
-	return &OptimizedStringCache{
-		columnValues:          make([]string, columns),
-		smallStrings:          make(map[string]string, 1024), // Smaller initial capacity
-		buffer:                make([]byte, 4096),            // Single larger buffer
-		smallStringThreshold:  64,                            // Fast path for common strings
-		mediumStringThreshold: 1024,                          // Threshold for sync.Map
-		useSharedStringMap:    true,                          // Enable shared string map
+// NewStringCache creates a new optimized string cache with improved performance.
+func NewStringCache(columns int) *StringCache {
+	return &StringCache{
+		columnValues:         make([]string, columns),
+		internMap:            make(map[string]string, 2048),  // Smaller initial capacity
+		cStringMap:           make(map[uintptr]string, 2048), // C string pointer cache
+		buffer:               make([]byte, 4096),             // Single larger buffer
+		smallStringThreshold: 64,                             // Fast path for common strings
+		largeStringThreshold: 1024,                           // Threshold for full interning
+		useSharedStringMap:   true,                           // Enable shared string map
 	}
 }
 
 // Get returns a cached string for the column value, optimized for speed
-func (sc *OptimizedStringCache) Get(colIdx int, value string) string {
+func (sc *StringCache) Get(colIdx int, value string) string {
 	// Ensure we have space in the column values
 	if colIdx >= len(sc.columnValues) {
 		newValues := make([]string, colIdx+1)
@@ -80,18 +88,18 @@ func (sc *OptimizedStringCache) Get(colIdx int, value string) string {
 	// Small string optimization - for very common short strings
 	if len(value) < sc.smallStringThreshold {
 		// Check the local map first - this is the hottest path
-		if cached, ok := sc.smallStrings[value]; ok {
+		if cached, ok := sc.internMap[value]; ok {
 			sc.columnValues[colIdx] = cached
 			sc.hits++
 			return cached
 		}
 
-		// For very small strings, use the shared pool for massive deduplication
+		// For very small strings, we use the shared pool for massive deduplication
 		if sc.useSharedStringMap {
 			result := globalBufferPool.GetSharedString(value)
 
 			// Cache locally too for future hits
-			sc.smallStrings[value] = result
+			sc.internMap[value] = result
 
 			sc.columnValues[colIdx] = result
 			sc.misses++
@@ -99,46 +107,31 @@ func (sc *OptimizedStringCache) Get(colIdx int, value string) string {
 		}
 
 		// For non-shared mode, store in local map
-		sc.smallStrings[value] = value
+		sc.internMap[value] = value
 		sc.columnValues[colIdx] = value
 		sc.misses++
 		return value
 	}
 
-	// For medium strings, use thread-safe map
-	if len(value) < sc.mediumStringThreshold {
-		// Check medium string cache
-		if cached, ok := sc.mediumStrings.Load(value); ok {
-			cachedStr := cached.(string)
-			sc.columnValues[colIdx] = cachedStr
-			sc.hits++
-			return cachedStr
-		}
-
+	// For medium strings, we selectively intern
+	if len(value) < sc.largeStringThreshold {
 		// Only use shared map for medium strings
 		if sc.useSharedStringMap {
 			result := globalBufferPool.GetSharedString(value)
-			sc.mediumStrings.Store(value, result)
 			sc.columnValues[colIdx] = result
 			sc.misses++
 			return result
 		}
-
-		// Store in medium string cache
-		sc.mediumStrings.Store(value, value)
-		sc.columnValues[colIdx] = value
-		sc.misses++
-		return value
 	}
 
-	// For large strings, no caching to avoid memory bloat
+	// For large strings, no interning to avoid memory bloat
 	sc.columnValues[colIdx] = value
 	sc.misses++
 	return value
 }
 
 // GetFromBytes converts a byte slice to a string with optimized performance
-func (sc *OptimizedStringCache) GetFromBytes(colIdx int, bytes []byte) string {
+func (sc *StringCache) GetFromBytes(colIdx int, bytes []byte) string {
 	// Ensure we have space in the column values
 	if colIdx >= len(sc.columnValues) {
 		newValues := make([]string, colIdx+1)
@@ -158,7 +151,7 @@ func (sc *OptimizedStringCache) GetFromBytes(colIdx int, bytes []byte) string {
 		s := string(bytes)
 
 		// Check the local map first
-		if cached, ok := sc.smallStrings[s]; ok {
+		if cached, ok := sc.internMap[s]; ok {
 			sc.columnValues[colIdx] = cached
 			sc.hits++
 			return cached
@@ -169,7 +162,7 @@ func (sc *OptimizedStringCache) GetFromBytes(colIdx int, bytes []byte) string {
 			result := globalBufferPool.GetSharedString(s)
 
 			// Cache locally too for future hits
-			sc.smallStrings[s] = result
+			sc.internMap[s] = result
 
 			sc.columnValues[colIdx] = result
 			sc.misses++
@@ -177,35 +170,25 @@ func (sc *OptimizedStringCache) GetFromBytes(colIdx int, bytes []byte) string {
 		}
 
 		// For non-shared mode, store in local map
-		sc.smallStrings[s] = s
+		sc.internMap[s] = s
 		sc.columnValues[colIdx] = s
 		sc.misses++
 		return s
 	}
 
 	// For medium strings
-	if len(bytes) < sc.mediumStringThreshold {
+	if len(bytes) < sc.largeStringThreshold {
 		s := string(bytes)
-
-		// Check medium string cache
-		if cached, ok := sc.mediumStrings.Load(s); ok {
-			cachedStr := cached.(string)
-			sc.columnValues[colIdx] = cachedStr
-			sc.hits++
-			return cachedStr
-		}
 
 		// Only use shared map for medium strings
 		if sc.useSharedStringMap {
 			result := globalBufferPool.GetSharedString(s)
-			sc.mediumStrings.Store(s, result)
 			sc.columnValues[colIdx] = result
 			sc.misses++
 			return result
 		}
 
-		// Store in medium string cache
-		sc.mediumStrings.Store(s, s)
+		// Otherwise just use the string directly
 		sc.columnValues[colIdx] = s
 		sc.misses++
 		return s
@@ -219,8 +202,8 @@ func (sc *OptimizedStringCache) GetFromBytes(colIdx int, bytes []byte) string {
 }
 
 // GetFromCString efficiently converts a C string to a Go string
-// Optimized for both performance and memory usage
-func (sc *OptimizedStringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t) string {
+// Optimized for both performance and memory usage with C string pointer caching
+func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t) string {
 	// Ensure we have space in the column values
 	if colIdx >= len(sc.columnValues) {
 		newValues := make([]string, colIdx+1)
@@ -234,6 +217,20 @@ func (sc *OptimizedStringCache) GetFromCString(colIdx int, cstr *C.char, length 
 		return ""
 	}
 
+	// Get C string address for cache lookup
+	cstrAddr := uintptr(unsafe.Pointer(cstr))
+
+	// Check C string pointer cache first - fastest path when same C string is reused
+	// This avoids the expensive C.GoStringN conversion completely
+	sc.mu.Lock()
+	if cached, ok := sc.cStringMap[cstrAddr]; ok {
+		sc.mu.Unlock()
+		sc.columnValues[colIdx] = cached
+		sc.cHits++
+		return cached
+	}
+	sc.mu.Unlock()
+
 	// Safety check - if length is unreasonably large, cap it
 	actualLength := int(length)
 	if actualLength > 1024*1024 { // Cap at 1MB for safety
@@ -244,19 +241,29 @@ func (sc *OptimizedStringCache) GetFromCString(colIdx int, cstr *C.char, length 
 	if actualLength < sc.smallStringThreshold {
 		s := C.GoStringN(cstr, C.int(actualLength))
 
-		// Check local map first for very small strings
-		if cached, ok := sc.smallStrings[s]; ok {
+		// Check local map for string value
+		if cached, ok := sc.internMap[s]; ok {
+			// Cache the C string pointer for future lookups
+			sc.mu.Lock()
+			sc.cStringMap[cstrAddr] = cached
+			sc.mu.Unlock()
+
 			sc.columnValues[colIdx] = cached
 			sc.hits++
 			return cached
 		}
 
-		// Use shared map for small strings
+		// For very small strings, use the shared pool for massive deduplication
 		if sc.useSharedStringMap {
 			result := globalBufferPool.GetSharedString(s)
 
 			// Cache locally for future hits
-			sc.smallStrings[s] = result
+			sc.internMap[s] = result
+
+			// Cache C string pointer too
+			sc.mu.Lock()
+			sc.cStringMap[cstrAddr] = result
+			sc.mu.Unlock()
 
 			sc.columnValues[colIdx] = result
 			sc.misses++
@@ -264,14 +271,20 @@ func (sc *OptimizedStringCache) GetFromCString(colIdx int, cstr *C.char, length 
 		}
 
 		// For non-shared mode, store in local map
-		sc.smallStrings[s] = s
+		sc.internMap[s] = s
+
+		// Cache C string pointer
+		sc.mu.Lock()
+		sc.cStringMap[cstrAddr] = s
+		sc.mu.Unlock()
+
 		sc.columnValues[colIdx] = s
 		sc.misses++
 		return s
 	}
 
 	// For medium strings, use buffer with synchronized access
-	if actualLength < sc.mediumStringThreshold {
+	if actualLength < sc.largeStringThreshold {
 		// Lock for buffer access
 		sc.mu.Lock()
 
@@ -295,97 +308,73 @@ func (sc *OptimizedStringCache) GetFromCString(colIdx int, cstr *C.char, length 
 		// Create string from buffer
 		s := string(sc.buffer[:actualLength])
 
+		// Cache the C string pointer before unlocking
+		sc.cStringMap[cstrAddr] = s
+
 		// Unlock after string creation but before caching
 		sc.mu.Unlock()
-
-		// Check medium string cache
-		if cached, ok := sc.mediumStrings.Load(s); ok {
-			cachedStr := cached.(string)
-			sc.columnValues[colIdx] = cachedStr
-			sc.hits++
-			return cachedStr
-		}
 
 		// Only use shared map for medium strings
 		if sc.useSharedStringMap {
 			result := globalBufferPool.GetSharedString(s)
-			sc.mediumStrings.Store(s, result)
+
+			// Update C string cache with the shared string
+			sc.mu.Lock()
+			sc.cStringMap[cstrAddr] = result
+			sc.mu.Unlock()
+
 			sc.columnValues[colIdx] = result
 			sc.misses++
 			return result
 		}
 
-		// Store in medium string cache
-		sc.mediumStrings.Store(s, s)
 		sc.columnValues[colIdx] = s
 		sc.misses++
 		return s
 	}
 
-	// For large strings, use direct C.GoString without caching
-	// This is simpler and avoids memory bloat for large strings
+	// For large strings, use direct C.GoString with minimal caching
 	s := C.GoStringN(cstr, C.int(actualLength))
+
+	// For large strings, we still cache the C string pointer
+	// This is important because the same large string may be used repeatedly
+	sc.mu.Lock()
+	sc.cStringMap[cstrAddr] = s
+	sc.mu.Unlock()
+
 	sc.columnValues[colIdx] = s
 	sc.misses++
 	return s
 }
 
-// Reset clears the caches to prevent unbounded growth
-func (sc *OptimizedStringCache) Reset() {
+// Reset clears the intern map to prevent unbounded growth
+func (sc *StringCache) Reset() {
 	// Only reset if the maps have grown significantly
-	smallMapSize := len(sc.smallStrings)
-	if smallMapSize > 10000 {
-		// Just create a new map - faster than selective copying
-		sc.smallStrings = make(map[string]string, 1024)
+	sc.mu.Lock()
+	internMapSize := len(sc.internMap)
+	cStringMapSize := len(sc.cStringMap)
+
+	if internMapSize > 10000 || cStringMapSize > 10000 {
+		// Just create new maps - faster than selective copying
+		sc.internMap = make(map[string]string, 2048)
+		sc.cStringMap = make(map[uintptr]string, 2048)
+
+		// Reset stats
+		sc.hits = 0
+		sc.misses = 0
+		sc.cHits = 0
 	}
-
-	// Always create a new medium map - it's cheaper than clearing
-	sc.mediumStrings = sync.Map{}
-
-	// Reset stats
-	sc.hits = 0
-	sc.misses = 0
+	sc.mu.Unlock()
 }
 
-// TuneCache optimizes cache parameters based on usage patterns
-func (sc *OptimizedStringCache) TuneCache() {
-	// Calculate hit rate
-	totalOps := sc.hits + sc.misses
-	if totalOps < 1000 {
-		return // Not enough data to tune
-	}
-
-	hitRate := float64(sc.hits) / float64(totalOps)
-
-	// Adjust thresholds based on hit rate
-	if hitRate < 0.3 {
-		// If hit rate is low, we might need to adjust our thresholds
-		if sc.smallStringThreshold < 128 {
-			sc.smallStringThreshold *= 2 // Try caching more strings as small
-		}
-
-		if sc.mediumStringThreshold < 2048 {
-			sc.mediumStringThreshold *= 2 // Try caching more strings as medium
-		}
-	} else if hitRate > 0.8 {
-		// If hit rate is very high, we might be caching too much
-		if sc.smallStringThreshold > 32 {
-			sc.smallStringThreshold /= 2 // Reduce small string threshold
-		}
-
-		if sc.mediumStringThreshold > 512 {
-			sc.mediumStringThreshold /= 2 // Reduce medium string threshold
-		}
-	}
-
-	// Reset stats for next tuning cycle
-	sc.hits = 0
-	sc.misses = 0
+// Stats returns cache hit/miss statistics
+func (sc *StringCache) Stats() (hits, misses, cHits int) {
+	return sc.hits, sc.misses, sc.cHits
 }
 
 // GetDedupString returns a deduplicated string from the cache
 // It uses the shared string map for maximum deduplication across all strings
-func (sc *OptimizedStringCache) GetDedupString(value string) string {
+func (sc *StringCache) GetDedupString(value string) string {
 	// Simple length check to avoid map lookups for empty strings
 	if value == "" {
 		return ""
@@ -394,7 +383,7 @@ func (sc *OptimizedStringCache) GetDedupString(value string) string {
 	// Small string optimization - for very common short strings
 	if len(value) < sc.smallStringThreshold {
 		// Check the local map first - this is the hottest path
-		if cached, ok := sc.smallStrings[value]; ok {
+		if cached, ok := sc.internMap[value]; ok {
 			sc.hits++
 			return cached
 		}
@@ -404,41 +393,29 @@ func (sc *OptimizedStringCache) GetDedupString(value string) string {
 			result := globalBufferPool.GetSharedString(value)
 
 			// Cache locally too for future hits
-			sc.smallStrings[value] = result
+			sc.internMap[value] = result
 
 			sc.misses++
 			return result
 		}
 
 		// For non-shared mode, store in local map
-		sc.smallStrings[value] = value
+		sc.internMap[value] = value
 		sc.misses++
 		return value
 	}
 
-	// Medium string optimization - use thread-safe map
-	if len(value) < sc.mediumStringThreshold {
-		// Check medium string cache
-		if cached, ok := sc.mediumStrings.Load(value); ok {
-			sc.hits++
-			return cached.(string)
-		}
-
+	// Medium string optimization
+	if len(value) < sc.largeStringThreshold {
 		// Only use shared map for medium strings
 		if sc.useSharedStringMap {
 			result := globalBufferPool.GetSharedString(value)
-			sc.mediumStrings.Store(value, result)
 			sc.misses++
 			return result
 		}
-
-		// Store in medium string cache
-		sc.mediumStrings.Store(value, value)
-		sc.misses++
-		return value
 	}
 
-	// For large strings, no caching to avoid memory bloat
+	// For large strings, no interning to avoid memory bloat
 	sc.misses++
 	return value
 }

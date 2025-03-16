@@ -44,6 +44,7 @@ Create the fastest, most reliable, zero-allocation DuckDB driver for Go, leverag
 - [ ] Complete parameter binding optimizations
 - [x] Fix boolean type handling in parameters and results
 - [x] Add rows affected tracking for DML operations 
+- [x] Implement `driver.StmtExecContext` and `driver.StmtQueryContext` for direct context support in statements
 - [ ] Implement `driver.NamedValueChecker` for better parameter binding
 - [ ] Add connection configuration options (timeouts, cache settings)
 - [ ] Add better error handling and detailed error messages
@@ -52,6 +53,7 @@ Create the fastest, most reliable, zero-allocation DuckDB driver for Go, leverag
 ### Phase 2: Advanced Features
 
 - [x] Implement batched operations via `BatchQuery`
+  - [x] Add context support for batch operations
 - [x] Add support for core DuckDB data types
   - [x] Improve date/timestamp type handling
   - [x] Add special handling for temporal data
@@ -98,6 +100,7 @@ Create the fastest, most reliable, zero-allocation DuckDB driver for Go, leverag
   - [x] Add shared string map for cross-query deduplication
   - [x] Add multiple buffer strategy to reduce contention
   - [x] Add adaptive buffer sizing based on hit rates
+  - [x] Optimize sync.Pool usage with pointer-based storage to reduce allocations
 - [ ] Benchmark-driven optimizations against real-world workloads
 - [ ] Compare and exceed performance of other database drivers
 
@@ -120,7 +123,7 @@ Create the fastest, most reliable, zero-allocation DuckDB driver for Go, leverag
 - [x] Code quality and testing
   - [x] Initial test suite for basic functionality
   - [x] Benchmark suite for core operations
-  - [ ] Add code quality checks and static analysis
+  - [x] Add code quality checks and static analysis (staticcheck)
   - [ ] Implement test coverage requirements (target: >90%)
   - [ ] Add fuzz testing for SQL parsing and driver robustness
   - [ ] Set up performance regression testing with benchmarks

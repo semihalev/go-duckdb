@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-func TestOptimizedStringCache(t *testing.T) {
+func TestStringCache(t *testing.T) {
 	// Create a new cache with 10 columns
-	cache := NewOptimizedStringCache(10)
+	cache := NewStringCache(10)
 
 	// Test Get method
 	t.Run("Get", func(t *testing.T) {
@@ -92,39 +92,11 @@ func TestOptimizedStringCache(t *testing.T) {
 			t.Errorf("Expected string of length %d, got length %d", len(largeBytes), len(s))
 		}
 	})
-
-	t.Run("Reset", func(t *testing.T) {
-		// Fill cache with lots of entries
-		for i := 0; i < 12000; i++ {
-			key := generateString(10) + generateStringWithNumber(i)
-			cache.Get(0, key)
-		}
-
-		// Verify cache is full
-		if len(cache.smallStrings) < 10000 {
-			t.Errorf("Expected smallStrings to have at least 10000 entries, got %d", len(cache.smallStrings))
-		}
-
-		// Reset the cache
-		cache.Reset()
-
-		// Verify cache was reset
-		if len(cache.smallStrings) >= 10000 {
-			t.Errorf("Expected smallStrings to be reset to < 10000, got %d", len(cache.smallStrings))
-		}
-
-		// Verify hits and misses reset
-		if cache.hits != 0 || cache.misses != 0 {
-			t.Errorf("Expected hits and misses to be reset to 0, got hits=%d, misses=%d", cache.hits, cache.misses)
-		}
-	})
 }
 
 func BenchmarkStringCache(b *testing.B) {
 	// Create both cache implementations for comparison
 	oldCache := NewStringCache(10)
-	optimizedCache := NewOptimizedStringCache(10)
-
 	// Create test data
 	smallStrings := make([]string, 1000)
 	for i := 0; i < 1000; i++ {
@@ -164,33 +136,6 @@ func BenchmarkStringCache(b *testing.B) {
 			// Periodic reset
 			if i%10000 == 0 {
 				oldCache.Reset()
-			}
-		}
-	})
-
-	// Benchmark optimized string cache
-	b.Run("OptimizedCache", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			idx := i % 10
-
-			// Mix of different string sizes
-			if i%100 < 70 {
-				// 70% small strings
-				strIdx := i % len(smallStrings)
-				optimizedCache.Get(idx, smallStrings[strIdx])
-			} else if i%100 < 90 {
-				// 20% medium strings
-				strIdx := i % len(mediumStrings)
-				optimizedCache.Get(idx, mediumStrings[strIdx])
-			} else {
-				// 10% large strings
-				strIdx := i % len(largeStrings)
-				optimizedCache.Get(idx, largeStrings[strIdx])
-			}
-
-			// Periodic reset
-			if i%10000 == 0 {
-				optimizedCache.Reset()
 			}
 		}
 	})

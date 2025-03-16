@@ -197,6 +197,18 @@ func (stmt *FastStmt) Exec(args []driver.Value) (driver.Result, error) {
 	return stmt.ExecuteWithResult(params...)
 }
 
+// ExecContext implements the driver.StmtExecContext interface.
+func (stmt *FastStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	// Convert driver.NamedValue to interface{}
+	params := make([]interface{}, len(args))
+	for i, arg := range args {
+		params[i] = arg.Value
+	}
+
+	// TODO: Respect context cancellation in the future
+	return stmt.ExecuteWithResult(params...)
+}
+
 // Query implements the driver.Stmt interface.
 func (stmt *FastStmt) Query(args []driver.Value) (driver.Rows, error) {
 	// Convert driver.Value to interface{}
@@ -205,6 +217,18 @@ func (stmt *FastStmt) Query(args []driver.Value) (driver.Rows, error) {
 		params[i] = arg
 	}
 
+	return stmt.ExecuteFast(params...)
+}
+
+// QueryContext implements the driver.StmtQueryContext interface.
+func (stmt *FastStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	// Convert driver.NamedValue to interface{}
+	params := make([]interface{}, len(args))
+	for i, arg := range args {
+		params[i] = arg.Value
+	}
+
+	// TODO: Respect context cancellation in the future
 	return stmt.ExecuteFast(params...)
 }
 
@@ -247,6 +271,21 @@ func (stmt *FastStmt) ExecuteWithResult(args ...interface{}) (driver.Result, err
 		for i, arg := range args {
 			driverArgs[i] = arg
 		}
+
+		// Check if standardStmt implements StmtExecContext
+		if execer, ok := stmt.standardStmt.(driver.StmtExecContext); ok {
+			// Convert to NamedValue
+			namedArgs := make([]driver.NamedValue, len(driverArgs))
+			for i, arg := range driverArgs {
+				namedArgs[i] = driver.NamedValue{
+					Ordinal: i + 1,
+					Value:   arg,
+				}
+			}
+			return execer.ExecContext(context.Background(), namedArgs)
+		}
+
+		// Fall back to Exec if StmtExecContext is not implemented
 		return stmt.standardStmt.Exec(driverArgs)
 	}
 
@@ -437,7 +476,7 @@ func newFastRowsFromBuffer(buffer *C.result_buffer_t) *FastRows {
 func finalizeRows(rows *FastRows) {
 	// First close the rows
 	rows.Close()
-	
+
 	// Then release buffer resources - we do this as a separate step to avoid use-after-free
 	// during actual use
 	rows.releaseBufferResources()
@@ -456,19 +495,19 @@ func (r *FastRows) Close() error {
 
 	// Mark as closed to prevent further Next() calls
 	r.closed = true
-	
+
 	// We'll hold onto our buffer but mark ourselves as closed
 	// This ensures any in-progress Scan operations can complete
 	// The buffer will be released when the finalizer runs or when
 	// explicitly released later
-	
+
 	// Remove finalizer since we're manually handling cleanup
 	runtime.SetFinalizer(r, nil)
-	
+
 	// Instead of immediately freeing the buffer, we'll hold onto it
 	// This prevents use-after-free when Close() is called during row scan
 	// We can implement a more sophisticated buffer release strategy if needed
-	
+
 	return nil
 }
 
@@ -689,7 +728,7 @@ func (conn *Connection) DirectQuery(query string, args ...interface{}) ([][]inte
 		}
 		defer stmt.Close()
 
-		rows, err = stmt.ExecuteFast(args...)
+		rows, _ = stmt.ExecuteFast(args...)
 	}
 
 	if err != nil {
@@ -761,6 +800,15 @@ func (w *FastStmtWrapper) Exec(args []driver.Value) (driver.Result, error) {
 	return w.stmt.ExecuteWithResult(params...)
 }
 
+// ExecContext executes a query with context that doesn't return rows.
+func (w *FastStmtWrapper) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	if w.stmt == nil {
+		return nil, fmt.Errorf("statement is closed")
+	}
+
+	return w.stmt.ExecContext(ctx, args)
+}
+
 // Query executes a query that may return rows, such as a SELECT.
 func (w *FastStmtWrapper) Query(args []driver.Value) (driver.Rows, error) {
 	if w.stmt == nil {
@@ -774,4 +822,13 @@ func (w *FastStmtWrapper) Query(args []driver.Value) (driver.Rows, error) {
 	}
 
 	return w.stmt.ExecuteFast(params...)
+}
+
+// QueryContext executes a query with context that may return rows.
+func (w *FastStmtWrapper) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	if w.stmt == nil {
+		return nil, fmt.Errorf("statement is closed")
+	}
+
+	return w.stmt.QueryContext(ctx, args)
 }

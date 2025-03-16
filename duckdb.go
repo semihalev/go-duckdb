@@ -50,10 +50,28 @@ const (
 func init() {
 	// Register the standard driver
 	sql.Register("duckdb", &Driver{})
-
-	// Register the fast driver with standard implementation for testing
-	// This prevents CGO type issues during tests
-	sql.Register("duckdb-fast", &Driver{})
+	
+	// Initialize the other pools to use pointers
+	globalBufferPool.columnNamesPool = sync.Pool{
+		New: func() interface{} {
+			buf := make([]string, 0, 32) // Common column count
+			return &buf
+		},
+	}
+	
+	globalBufferPool.columnTypesPool = sync.Pool{
+		New: func() interface{} {
+			buf := make([]C.duckdb_type, 0, 32) // Common column count
+			return &buf
+		},
+	}
+	
+	globalBufferPool.namedArgsPool = sync.Pool{
+		New: func() interface{} {
+			buf := make([]driver.NamedValue, 0, 16) // Common parameter count
+			return &buf
+		},
+	}
 }
 
 // Utility functions for string conversions
@@ -83,14 +101,6 @@ func cBoolToGo(b C.bool) bool {
 	// Since Go can't directly convert between C bool and Go bool
 	ptr := unsafe.Pointer(&b)
 	// Any non-zero value is considered true
-	return *(*C.char)(ptr) != 0
-}
-
-// isNullValue safely checks if a value is null
-// Avoids C bool type issues
-func isNullValue(value C.bool) bool {
-	// Convert to int8 first to avoid C bool comparison issues
-	ptr := unsafe.Pointer(&value)
 	return *(*C.char)(ptr) != 0
 }
 
@@ -161,7 +171,7 @@ type ResultBufferPool struct {
 // GetStringCache retrieves a StringCache from the pool or creates a new one.
 // The initialCapacity parameter specifies the initial number of columns.
 func (p *ResultBufferPool) GetStringCache(initialCapacity int) StringCacher {
-	if cache, ok := p.stringCachePool.Get().(*OptimizedStringCache); ok {
+	if cache, ok := p.stringCachePool.Get().(*StringCache); ok {
 		// Ensure the cache has sufficient capacity
 		if len(cache.columnValues) < initialCapacity {
 			cache.columnValues = make([]string, initialCapacity)
@@ -169,8 +179,8 @@ func (p *ResultBufferPool) GetStringCache(initialCapacity int) StringCacher {
 		return cache
 	}
 
-	// Create new optimized cache if none in pool
-	return NewOptimizedStringCache(initialCapacity)
+	// Create new cache if none in pool
+	return NewStringCache(initialCapacity)
 }
 
 // PutStringCache returns a StringCache to the pool for reuse.
@@ -179,24 +189,11 @@ func (p *ResultBufferPool) PutStringCache(cache StringCacher) {
 		return
 	}
 
-	// If it's our optimized string cache, we can reuse it
-	if optCache, ok := cache.(*OptimizedStringCache); ok {
+	// If it's our string cache, we can reuse it
+	if sc, ok := cache.(*StringCache); ok {
 		// Reset the cache to prevent holding onto too much memory
-		optCache.Reset()
-		p.stringCachePool.Put(optCache)
-		return
-	}
-
-	// If it's our standard string cache, we can reuse it too
-	if stdCache, ok := cache.(*StringCache); ok {
-		// Reset the cache to prevent holding onto too much memory
-		if len(stdCache.internMap) > 1000 {
-			stdCache.Reset()
-		}
-
-		// Convert to optimized cache for next use
-		optCache := NewOptimizedStringCache(len(stdCache.columnValues))
-		p.stringCachePool.Put(optCache)
+		sc.Reset()
+		p.stringCachePool.Put(sc)
 		return
 	}
 
@@ -206,7 +203,9 @@ func (p *ResultBufferPool) PutStringCache(cache StringCacher) {
 
 // GetColumnNamesBuffer retrieves a slice for column names from the pool or creates a new one.
 func (p *ResultBufferPool) GetColumnNamesBuffer(capacity int) []string {
-	if buf, ok := p.columnNamesPool.Get().([]string); ok {
+	// Try to get a pointer to a slice from the pool
+	if pBuf, ok := p.columnNamesPool.Get().(*[]string); ok {
+		buf := *pBuf
 		if cap(buf) >= capacity {
 			return buf[:capacity]
 		}
@@ -219,13 +218,18 @@ func (p *ResultBufferPool) GetColumnNamesBuffer(capacity int) []string {
 // PutColumnNamesBuffer returns a column names buffer to the pool for reuse.
 func (p *ResultBufferPool) PutColumnNamesBuffer(buf []string) {
 	if buf != nil && cap(buf) > 0 {
-		p.columnNamesPool.Put(buf[:0]) // Clear slice but keep capacity
+		// Create a pointer to the slice to avoid allocations
+		pBuf := &buf
+		*pBuf = (*pBuf)[:0] // Clear slice but keep capacity
+		p.columnNamesPool.Put(pBuf) // Store the pointer
 	}
 }
 
 // GetColumnTypesBuffer retrieves a slice for column types from the pool or creates a new one.
 func (p *ResultBufferPool) GetColumnTypesBuffer(capacity int) []C.duckdb_type {
-	if buf, ok := p.columnTypesPool.Get().([]C.duckdb_type); ok {
+	// Try to get a pointer to a slice from the pool
+	if pBuf, ok := p.columnTypesPool.Get().(*[]C.duckdb_type); ok {
+		buf := *pBuf
 		if cap(buf) >= capacity {
 			return buf[:capacity]
 		}
@@ -238,13 +242,18 @@ func (p *ResultBufferPool) GetColumnTypesBuffer(capacity int) []C.duckdb_type {
 // PutColumnTypesBuffer returns a column types buffer to the pool for reuse.
 func (p *ResultBufferPool) PutColumnTypesBuffer(buf []C.duckdb_type) {
 	if buf != nil && cap(buf) > 0 {
-		p.columnTypesPool.Put(buf[:0]) // Clear slice but keep capacity
+		// Create a pointer to the slice to avoid allocations
+		pBuf := &buf
+		*pBuf = (*pBuf)[:0] // Clear slice but keep capacity
+		p.columnTypesPool.Put(pBuf) // Store the pointer
 	}
 }
 
 // GetNamedArgsBuffer retrieves a slice for named arguments from the pool or creates a new one.
 func (p *ResultBufferPool) GetNamedArgsBuffer(capacity int) []driver.NamedValue {
-	if buf, ok := p.namedArgsPool.Get().([]driver.NamedValue); ok {
+	// Try to get a pointer to a slice from the pool
+	if pBuf, ok := p.namedArgsPool.Get().(*[]driver.NamedValue); ok {
+		buf := *pBuf
 		if cap(buf) >= capacity {
 			return buf[:capacity]
 		}
@@ -257,7 +266,10 @@ func (p *ResultBufferPool) GetNamedArgsBuffer(capacity int) []driver.NamedValue 
 // PutNamedArgsBuffer returns a named arguments buffer to the pool for reuse.
 func (p *ResultBufferPool) PutNamedArgsBuffer(buf []driver.NamedValue) {
 	if buf != nil && cap(buf) > 0 {
-		p.namedArgsPool.Put(buf[:0]) // Clear slice but keep capacity
+		// Create a pointer to the slice to avoid allocations
+		pBuf := &buf
+		*pBuf = (*pBuf)[:0] // Clear slice but keep capacity
+		p.namedArgsPool.Put(pBuf) // Store the pointer
 	}
 }
 
@@ -268,7 +280,8 @@ func (p *ResultBufferPool) GetBlobBuffer(minimumCapacity int) []byte {
 	// Handle small blob buffers (≤ 256 bytes) - very common in database workloads
 	if minimumCapacity <= 256 {
 		// Try to get a buffer from the small pool - most blob column values are small
-		if buf, ok := p.smallBlobPool.Get().([]byte); ok {
+		if pBuf, ok := p.smallBlobPool.Get().(*[]byte); ok {
+			buf := *pBuf
 			if cap(buf) >= minimumCapacity {
 				return buf[:minimumCapacity]
 			}
@@ -279,7 +292,8 @@ func (p *ResultBufferPool) GetBlobBuffer(minimumCapacity int) []byte {
 
 	// Handle medium blob buffers (≤ 4KB) - common size for document fields, JSON values
 	if minimumCapacity <= 4*1024 {
-		if buf, ok := p.mediumBlobPool.Get().([]byte); ok {
+		if pBuf, ok := p.mediumBlobPool.Get().(*[]byte); ok {
+			buf := *pBuf
 			if cap(buf) >= minimumCapacity {
 				return buf[:minimumCapacity]
 			}
@@ -290,7 +304,8 @@ func (p *ResultBufferPool) GetBlobBuffer(minimumCapacity int) []byte {
 
 	// Handle large blob buffers (≤ 64KB) - less common but still worth pooling
 	if minimumCapacity <= 64*1024 {
-		if buf, ok := p.largeBlobPool.Get().([]byte); ok {
+		if pBuf, ok := p.largeBlobPool.Get().(*[]byte); ok {
+			buf := *pBuf
 			if cap(buf) >= minimumCapacity {
 				return buf[:minimumCapacity]
 			}
@@ -312,7 +327,8 @@ func (p *ResultBufferPool) GetBlobBuffer(minimumCapacity int) []byte {
 	}
 
 	// Try the general blob buffer pool for anything larger
-	if buf, ok := p.blobBufferPool.Get().([]byte); ok {
+	if pBuf, ok := p.blobBufferPool.Get().(*[]byte); ok {
+		buf := *pBuf
 		if cap(buf) >= minimumCapacity {
 			return buf[:minimumCapacity]
 		}
@@ -332,24 +348,28 @@ func (p *ResultBufferPool) PutBlobBuffer(buf []byte) {
 	// Get the buffer's capacity to decide which pool to return it to
 	bufCap := cap(buf)
 
+	// Create a pointer to avoid allocations
+	pBuf := &buf
+	*pBuf = (*pBuf)[:0] // Clear slice but keep capacity
+
 	// Choose appropriate pool based on buffer capacity
 	switch {
 	case bufCap == 256:
 		// Return to small pool - exact size match for highest reuse
-		p.smallBlobPool.Put(buf[:0])
+		p.smallBlobPool.Put(pBuf)
 
 	case bufCap == 4*1024:
 		// Return to medium pool - exact size match
-		p.mediumBlobPool.Put(buf[:0])
+		p.mediumBlobPool.Put(pBuf)
 
 	case bufCap == 64*1024:
 		// Return to large pool - exact size match
-		p.largeBlobPool.Put(buf[:0])
+		p.largeBlobPool.Put(pBuf)
 
 	case bufCap >= 128 && bufCap <= 1024*1024:
 		// Only pool reasonably sized buffers in the general pool
 		// Too small isn't worth it, too large wastes memory
-		p.blobBufferPool.Put(buf[:0])
+		p.blobBufferPool.Put(pBuf)
 	}
 
 	// Buffers outside these ranges are left for garbage collection
@@ -362,7 +382,8 @@ func (p *ResultBufferPool) GetStringBuffer(minimumCapacity int) []byte {
 	// Most column names, simple values, etc. fall in this category
 	if minimumCapacity <= 128 {
 		// Try to get a buffer from the small string pool
-		if buf, ok := p.smallStringPool.Get().([]byte); ok {
+		if pBuf, ok := p.smallStringPool.Get().(*[]byte); ok {
+			buf := *pBuf
 			if cap(buf) >= minimumCapacity {
 				return buf[:minimumCapacity]
 			}
@@ -373,7 +394,8 @@ func (p *ResultBufferPool) GetStringBuffer(minimumCapacity int) []byte {
 
 	// Handle medium strings (≤ 2KB) - common for longer text fields
 	if minimumCapacity <= 2*1024 {
-		if buf, ok := p.mediumStringPool.Get().([]byte); ok {
+		if pBuf, ok := p.mediumStringPool.Get().(*[]byte); ok {
+			buf := *pBuf
 			if cap(buf) >= minimumCapacity {
 				return buf[:minimumCapacity]
 			}
@@ -395,7 +417,8 @@ func (p *ResultBufferPool) GetStringBuffer(minimumCapacity int) []byte {
 	}
 
 	// Try the general string buffer pool for larger strings
-	if buf, ok := p.stringBufferPool.Get().([]byte); ok {
+	if pBuf, ok := p.stringBufferPool.Get().(*[]byte); ok {
+		buf := *pBuf
 		if cap(buf) >= minimumCapacity {
 			return buf[:minimumCapacity]
 		}
@@ -415,18 +438,22 @@ func (p *ResultBufferPool) PutStringBuffer(buf []byte) {
 	// Choose appropriate pool based on buffer capacity
 	bufCap := cap(buf)
 
+	// Create a pointer to avoid allocations
+	pBuf := &buf
+	*pBuf = (*pBuf)[:0] // Clear slice but keep capacity
+
 	switch {
 	case bufCap == 128:
 		// This is a small string buffer - perfect size match
-		p.smallStringPool.Put(buf[:0])
+		p.smallStringPool.Put(pBuf)
 
 	case bufCap == 2*1024:
 		// This is a medium string buffer - perfect size match
-		p.mediumStringPool.Put(buf[:0])
+		p.mediumStringPool.Put(pBuf)
 
 	case bufCap >= 64 && bufCap <= 1024*1024:
 		// General pool for reasonable sized buffers that don't match fixed tiers
-		p.stringBufferPool.Put(buf[:0])
+		p.stringBufferPool.Put(pBuf)
 	}
 	// For buffers outside our desired size range, let them be garbage collected
 }
@@ -554,23 +581,44 @@ func (p *ResultBufferPool) PutResultSetWrapper(wrapper *ResultSetWrapper) {
 var globalBufferPool = &ResultBufferPool{
 	sharedStringMap: make(map[string]string, 10000),
 
-	// Initialize tiered pools for string handling
+	// Initialize tiered pools for string handling with pointer types
 	smallStringPool: sync.Pool{
-		New: func() interface{} { return make([]byte, 0, 128) },
+		New: func() interface{} { 
+			buf := make([]byte, 0, 128)
+			return &buf
+		},
 	},
 	mediumStringPool: sync.Pool{
-		New: func() interface{} { return make([]byte, 0, 2*1024) },
+		New: func() interface{} { 
+			buf := make([]byte, 0, 2*1024)
+			return &buf
+		},
 	},
 
-	// Initialize tiered pools for blob handling
+	// Initialize tiered pools for blob handling with pointer types
 	smallBlobPool: sync.Pool{
-		New: func() interface{} { return make([]byte, 0, 256) },
+		New: func() interface{} { 
+			buf := make([]byte, 0, 256)
+			return &buf
+		},
 	},
 	mediumBlobPool: sync.Pool{
-		New: func() interface{} { return make([]byte, 0, 4*1024) },
+		New: func() interface{} { 
+			buf := make([]byte, 0, 4*1024)
+			return &buf
+		},
 	},
 	largeBlobPool: sync.Pool{
-		New: func() interface{} { return make([]byte, 0, 64*1024) },
+		New: func() interface{} { 
+			buf := make([]byte, 0, 64*1024)
+			return &buf
+		},
+	},
+	stringBufferPool: sync.Pool{
+		New: func() interface{} {
+			buf := make([]byte, 0, 4*1024)
+			return &buf
+		},
 	},
 }
 

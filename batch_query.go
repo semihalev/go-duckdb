@@ -8,6 +8,7 @@ package duckdb
 import "C"
 
 import (
+	"context"
 	"database/sql/driver"
 	"errors"
 	"fmt"
@@ -434,6 +435,14 @@ func (br *BatchRows) Close() error {
 	return nil
 }
 
+// ColumnTypeScanType returns the Go type that can be used to scan values from this column
+func (br *BatchRows) ColumnTypeScanType(index int) reflect.Type {
+	if br.query == nil {
+		return nil
+	}
+	return br.query.ColumnTypeScanType(index)
+}
+
 // Next moves to the next row
 // This is where the key batch optimization happens - we only fetch new batches
 // when we've exhausted the current one
@@ -564,15 +573,16 @@ func (bs *BatchStmt) Close() error {
 	return nil
 }
 
-// QueryBatch executes the prepared statement with the given parameters and returns batch rows
-func (bs *BatchStmt) QueryBatch(args ...interface{}) (*BatchRows, error) {
-	if bs.stmt == nil {
-		return nil, errors.New("statement is closed")
-	}
+// NumInput returns the number of placeholder parameters
+func (bs *BatchStmt) NumInput() int {
+	return bs.paramCount
+}
 
+// bindBatchParameters binds parameters to a prepared statement
+func (bs *BatchStmt) bindBatchParameters(args []interface{}) error {
 	// Bind parameters
 	if len(args) != bs.paramCount {
-		return nil, fmt.Errorf("expected %d parameters, got %d", bs.paramCount, len(args))
+		return fmt.Errorf("expected %d parameters, got %d", bs.paramCount, len(args))
 	}
 
 	// Bind each parameter
@@ -581,7 +591,7 @@ func (bs *BatchStmt) QueryBatch(args ...interface{}) (*BatchRows, error) {
 
 		if arg == nil {
 			if err := C.duckdb_bind_null(*bs.stmt, idx); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind NULL parameter at index %d", i)
+				return fmt.Errorf("failed to bind NULL parameter at index %d", i)
 			}
 			continue
 		}
@@ -594,92 +604,97 @@ func (bs *BatchStmt) QueryBatch(args ...interface{}) (*BatchRows, error) {
 				val = 1
 			}
 			if err := C.duckdb_bind_int8(*bs.stmt, idx, val); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind boolean parameter at index %d", i)
+				return fmt.Errorf("failed to bind boolean parameter at index %d", i)
 			}
 
 		case int8:
 			if err := C.duckdb_bind_int8(*bs.stmt, idx, C.int8_t(v)); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind int8 parameter at index %d", i)
+				return fmt.Errorf("failed to bind int8 parameter at index %d", i)
 			}
 
 		case int16:
 			if err := C.duckdb_bind_int16(*bs.stmt, idx, C.int16_t(v)); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind int16 parameter at index %d", i)
+				return fmt.Errorf("failed to bind int16 parameter at index %d", i)
 			}
 
 		case int32:
 			if err := C.duckdb_bind_int32(*bs.stmt, idx, C.int32_t(v)); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind int32 parameter at index %d", i)
+				return fmt.Errorf("failed to bind int32 parameter at index %d", i)
 			}
 
 		case int:
 			if err := C.duckdb_bind_int64(*bs.stmt, idx, C.int64_t(v)); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind int parameter at index %d", i)
+				return fmt.Errorf("failed to bind int parameter at index %d", i)
 			}
 
 		case int64:
 			if err := C.duckdb_bind_int64(*bs.stmt, idx, C.int64_t(v)); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind int64 parameter at index %d", i)
+				return fmt.Errorf("failed to bind int64 parameter at index %d", i)
 			}
 
 		case uint8:
 			if err := C.duckdb_bind_uint8(*bs.stmt, idx, C.uint8_t(v)); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind uint8 parameter at index %d", i)
+				return fmt.Errorf("failed to bind uint8 parameter at index %d", i)
 			}
 
 		case uint16:
 			if err := C.duckdb_bind_uint16(*bs.stmt, idx, C.uint16_t(v)); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind uint16 parameter at index %d", i)
+				return fmt.Errorf("failed to bind uint16 parameter at index %d", i)
 			}
 
 		case uint32:
 			if err := C.duckdb_bind_uint32(*bs.stmt, idx, C.uint32_t(v)); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind uint32 parameter at index %d", i)
+				return fmt.Errorf("failed to bind uint32 parameter at index %d", i)
 			}
 
 		case uint:
 			if err := C.duckdb_bind_uint64(*bs.stmt, idx, C.uint64_t(v)); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind uint parameter at index %d", i)
+				return fmt.Errorf("failed to bind uint parameter at index %d", i)
 			}
 
 		case uint64:
 			if err := C.duckdb_bind_uint64(*bs.stmt, idx, C.uint64_t(v)); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind uint64 parameter at index %d", i)
+				return fmt.Errorf("failed to bind uint64 parameter at index %d", i)
 			}
 
 		case float32:
 			if err := C.duckdb_bind_float(*bs.stmt, idx, C.float(v)); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind float32 parameter at index %d", i)
+				return fmt.Errorf("failed to bind float32 parameter at index %d", i)
 			}
 
 		case float64:
 			if err := C.duckdb_bind_double(*bs.stmt, idx, C.double(v)); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind float64 parameter at index %d", i)
+				return fmt.Errorf("failed to bind float64 parameter at index %d", i)
 			}
 
 		case string:
 			cStr := cString(v)
 			defer freeString(cStr)
 			if err := C.duckdb_bind_varchar(*bs.stmt, idx, cStr); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to bind string parameter at index %d", i)
+				return fmt.Errorf("failed to bind string parameter at index %d", i)
 			}
 
 		case []byte:
 			if len(v) == 0 {
 				if err := C.duckdb_bind_blob(*bs.stmt, idx, unsafe.Pointer(&[]byte{0}[0]), C.idx_t(0)); err == C.DuckDBError {
-					return nil, fmt.Errorf("failed to bind empty blob parameter at index %d", i)
+					return fmt.Errorf("failed to bind empty blob parameter at index %d", i)
 				}
 			} else {
 				if err := C.duckdb_bind_blob(*bs.stmt, idx, unsafe.Pointer(&v[0]), C.idx_t(len(v))); err == C.DuckDBError {
-					return nil, fmt.Errorf("failed to bind blob parameter at index %d", i)
+					return fmt.Errorf("failed to bind blob parameter at index %d", i)
 				}
 			}
 
 		default:
-			return nil, fmt.Errorf("unsupported parameter type %T at index %d", v, i)
+			return fmt.Errorf("unsupported parameter type %T at index %d", v, i)
 		}
 	}
+	
+	return nil
+}
 
+// executeQueryBatch executes a prepared statement and returns batch rows
+func (bs *BatchStmt) executeQueryBatch() (*BatchRows, error) {
 	// Execute statement
 	var result C.duckdb_result
 	if err := C.duckdb_execute_prepared(*bs.stmt, &result); err == C.DuckDBError {
@@ -691,4 +706,110 @@ func (bs *BatchStmt) QueryBatch(args ...interface{}) (*BatchRows, error) {
 
 	// Create batch rows
 	return NewBatchRows(batchQuery), nil
+}
+
+// QueryBatch executes the prepared statement with the given parameters and returns batch rows
+func (bs *BatchStmt) QueryBatch(args ...interface{}) (*BatchRows, error) {
+	if bs.stmt == nil {
+		return nil, errors.New("statement is closed")
+	}
+
+	// Bind parameters
+	if err := bs.bindBatchParameters(args); err != nil {
+		return nil, err
+	}
+
+	// Execute query and return results
+	return bs.executeQueryBatch()
+}
+
+// QueryContext implements the driver.StmtQueryContext interface for batch statements
+func (bs *BatchStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	if bs.stmt == nil {
+		return nil, errors.New("statement is closed")
+	}
+
+	// Convert named parameters to positional for our implementation
+	params := make([]interface{}, len(args))
+	for i, arg := range args {
+		params[i] = arg.Value
+	}
+
+	// TODO: Respect context cancellation in the future
+	
+	// Bind parameters
+	if err := bs.bindBatchParameters(params); err != nil {
+		return nil, err
+	}
+
+	// Execute query and return results
+	return bs.executeQueryBatch()
+}
+
+// Exec implements the driver.Stmt interface for batch statements
+func (bs *BatchStmt) Exec(args []driver.Value) (driver.Result, error) {
+	if bs.stmt == nil {
+		return nil, errors.New("statement is closed")
+	}
+
+	// Convert driver.Value to interface{}
+	params := make([]interface{}, len(args))
+	for i, arg := range args {
+		params[i] = arg
+	}
+
+	// Bind parameters
+	if err := bs.bindBatchParameters(params); err != nil {
+		return nil, err
+	}
+
+	// Execute statement
+	var result C.duckdb_result
+	if err := C.duckdb_execute_prepared(*bs.stmt, &result); err == C.DuckDBError {
+		return nil, fmt.Errorf("failed to execute statement: %s", goString(C.duckdb_result_error(&result)))
+	}
+	defer C.duckdb_destroy_result(&result)
+
+	// Extract affected rows
+	rowsAffected := int64(C.duckdb_rows_changed(&result))
+
+	return &Result{
+		rowsAffected: rowsAffected,
+		lastInsertID: 0, // DuckDB doesn't support last insert ID
+	}, nil
+}
+
+// ExecContext implements the driver.StmtExecContext interface for batch statements
+func (bs *BatchStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	if bs.stmt == nil {
+		return nil, errors.New("statement is closed")
+	}
+
+	// Convert named parameters to positional for our implementation
+	params := make([]interface{}, len(args))
+	for i, arg := range args {
+		params[i] = arg.Value
+	}
+
+	// TODO: Respect context cancellation in the future
+
+	// Bind parameters
+	if err := bs.bindBatchParameters(params); err != nil {
+		return nil, err
+	}
+
+	// Execute statement
+	var result C.duckdb_result
+	if err := C.duckdb_execute_prepared(*bs.stmt, &result); err == C.DuckDBError {
+		return nil, fmt.Errorf("failed to execute statement: %s", goString(C.duckdb_result_error(&result)))
+	}
+	defer C.duckdb_destroy_result(&result)
+
+	// Extract affected rows
+	rowsAffected := int64(C.duckdb_rows_changed(&result))
+
+	return &Result{
+		rowsAffected: rowsAffected,
+		lastInsertID: 0, // DuckDB doesn't support last insert ID
+	}, nil
 }

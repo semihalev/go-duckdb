@@ -1,6 +1,7 @@
 package duckdb
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -171,7 +172,7 @@ func BenchmarkInsertAppender(b *testing.B) {
 	defer conn.Close()
 
 	// Create table
-	_, err = conn.ExecContext(nil, `CREATE TABLE benchmark (id INTEGER, name VARCHAR, value DOUBLE)`, nil)
+	_, err = conn.ExecContext(context.TODO(), `CREATE TABLE benchmark (id INTEGER, name VARCHAR, value DOUBLE)`, nil)
 	if err != nil {
 		b.Fatalf("failed to create table: %v", err)
 	}
@@ -212,7 +213,7 @@ func BenchmarkBulkInsertAppender(b *testing.B) {
 	defer conn.Close()
 
 	// Create table
-	_, err = conn.ExecContext(nil, `CREATE TABLE benchmark (id INTEGER, name VARCHAR, value DOUBLE)`, nil)
+	_, err = conn.ExecContext(context.TODO(), `CREATE TABLE benchmark (id INTEGER, name VARCHAR, value DOUBLE)`, nil)
 	if err != nil {
 		b.Fatalf("failed to create table: %v", err)
 	}
