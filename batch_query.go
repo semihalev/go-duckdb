@@ -23,37 +23,37 @@ const DefaultBatchSize = 1000
 // BatchQuery represents a batch-oriented query result
 // It processes data in column-wise batches for much higher performance
 type BatchQuery struct {
-	result       *C.duckdb_result
-	columnCount  int
-	rowCount     int64
-	columnNames  []string
-	columnTypes  []C.duckdb_type
-	currentRow   int64
-	batchSize    int
-	closed       bool
-	resultOwned  bool // Whether this query owns the result and should free it
-	
+	result      *C.duckdb_result
+	columnCount int
+	rowCount    int64
+	columnNames []string
+	columnTypes []C.duckdb_type
+	currentRow  int64
+	batchSize   int
+	closed      bool
+	resultOwned bool // Whether this query owns the result and should free it
+
 	// Reusable vectors to avoid allocations
-	vectors      []*ColumnVector
-	
+	vectors []*ColumnVector
+
 	// Current batch state
-	currentBatch     int64  // Current batch number
-	batchRowsRead    int    // Rows read in the current batch
-	batchAvailable   int    // Total rows available in the current batch
-	
+	currentBatch   int64 // Current batch number
+	batchRowsRead  int   // Rows read in the current batch
+	batchAvailable int   // Total rows available in the current batch
+
 	// Temporary buffer for conversions
-	buffer       []byte
+	buffer []byte
 }
 
 // ColumnVector represents a type-specific vector of column values
 // Using column vectors allows much more efficient processing than row-wise access
 type ColumnVector struct {
 	// Common properties
-	columnType  C.duckdb_type
-	nullMap     []bool     // Which values are NULL
-	length      int        // Number of values in the vector
-	capacity    int        // Capacity of the vector
-	
+	columnType C.duckdb_type
+	nullMap    []bool // Which values are NULL
+	length     int    // Number of values in the vector
+	capacity   int    // Capacity of the vector
+
 	// Type-specific storage - we only populate the relevant field
 	// This design avoids unnecessary allocations for unused types
 	boolData    []bool
@@ -77,37 +77,37 @@ func NewBatchQuery(result *C.duckdb_result, batchSize int) *BatchQuery {
 	if batchSize <= 0 {
 		batchSize = DefaultBatchSize
 	}
-	
+
 	// Get column and row counts
 	columnCount := int(C.duckdb_column_count(result))
 	rowCount := int64(C.duckdb_row_count(result))
-	
+
 	// Initialize batch query
 	bq := &BatchQuery{
-		result:        result,
-		columnCount:   columnCount,
-		rowCount:      rowCount,
-		columnNames:   make([]string, columnCount),
-		columnTypes:   make([]C.duckdb_type, columnCount),
-		batchSize:     batchSize,
-		vectors:       make([]*ColumnVector, columnCount),
-		buffer:        make([]byte, 4096), // Reusable buffer for string conversions
-		resultOwned:   true,              // By default, we own the result
+		result:      result,
+		columnCount: columnCount,
+		rowCount:    rowCount,
+		columnNames: make([]string, columnCount),
+		columnTypes: make([]C.duckdb_type, columnCount),
+		batchSize:   batchSize,
+		vectors:     make([]*ColumnVector, columnCount),
+		buffer:      make([]byte, 4096), // Reusable buffer for string conversions
+		resultOwned: true,               // By default, we own the result
 	}
-	
+
 	// Get column names and types
 	for i := 0; i < columnCount; i++ {
 		colIdx := C.idx_t(i)
 		bq.columnNames[i] = C.GoString(C.duckdb_column_name(result, colIdx))
 		bq.columnTypes[i] = C.duckdb_column_type(result, colIdx)
-		
+
 		// Initialize column vector based on type
 		bq.vectors[i] = bq.createColumnVector(bq.columnTypes[i], batchSize)
 	}
-	
+
 	// Prepare first batch
 	bq.fetchNextBatch()
-	
+
 	return bq
 }
 
@@ -118,7 +118,7 @@ func (bq *BatchQuery) createColumnVector(colType C.duckdb_type, capacity int) *C
 		nullMap:    make([]bool, capacity),
 		capacity:   capacity,
 	}
-	
+
 	// Allocate type-specific storage based on column type
 	switch colType {
 	case C.DUCKDB_TYPE_BOOLEAN:
@@ -151,7 +151,7 @@ func (bq *BatchQuery) createColumnVector(colType C.duckdb_type, capacity int) *C
 		// For complex types (timestamps, etc.), use a generic slice
 		cv.timeData = make([]interface{}, capacity)
 	}
-	
+
 	return cv
 }
 
@@ -165,7 +165,7 @@ func (bq *BatchQuery) ColumnTypeScanType(index int) reflect.Type {
 	if index < 0 || index >= bq.columnCount {
 		return nil
 	}
-	
+
 	switch bq.columnTypes[index] {
 	case C.DUCKDB_TYPE_BOOLEAN:
 		return reflect.TypeOf(bool(false))
@@ -204,18 +204,18 @@ func (bq *BatchQuery) Close() error {
 	if bq.closed {
 		return nil
 	}
-	
+
 	// Free DuckDB result if we own it
 	if bq.resultOwned && bq.result != nil {
 		C.duckdb_destroy_result(bq.result)
 		bq.result = nil
 	}
-	
+
 	// Help GC by clearing references
 	bq.vectors = nil
 	bq.buffer = nil
 	bq.closed = true
-	
+
 	return nil
 }
 
@@ -227,7 +227,7 @@ func (bq *BatchQuery) fetchNextBatch() bool {
 		bq.batchAvailable = 0
 		return false
 	}
-	
+
 	// Calculate how many rows to fetch in this batch
 	batchStart := bq.currentRow
 	rowsRemaining := bq.rowCount - batchStart
@@ -235,24 +235,24 @@ func (bq *BatchQuery) fetchNextBatch() bool {
 	if rowsRemaining < int64(batchSize) {
 		batchSize = int(rowsRemaining)
 	}
-	
+
 	// Reset batch state
 	bq.batchRowsRead = 0
 	bq.batchAvailable = batchSize
-	
+
 	// Extract data in column-wise fashion (much more efficient than row-wise)
 	for colIdx := 0; colIdx < bq.columnCount; colIdx++ {
 		vector := bq.vectors[colIdx]
 		vector.length = batchSize
-		
+
 		// Function call is outside the loop to minimize CGO boundary crossings
 		bq.extractColumnBatch(colIdx, int(batchStart), batchSize, vector)
 	}
-	
+
 	// Update current batch
 	bq.currentBatch++
 	bq.currentRow += int64(batchSize)
-	
+
 	return true
 }
 
@@ -263,7 +263,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 	cColIdx := C.idx_t(colIdx)
 	cStartRow := C.idx_t(startRow)
 	colType := bq.columnTypes[colIdx]
-	
+
 	// First pass: extract null values for the entire batch
 	// This is done separately to minimize CGO boundary crossings
 	for i := 0; i < batchSize; i++ {
@@ -271,7 +271,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 		isNull := C.duckdb_value_is_null(bq.result, cColIdx, rowIdx)
 		vector.nullMap[i] = cBoolToGo(isNull)
 	}
-	
+
 	// Second pass: extract non-null values based on column type
 	// We extract an entire column at once to minimize CGO boundaries
 	switch colType {
@@ -284,7 +284,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 				vector.boolData[i] = cBoolToGo(val)
 			}
 		}
-		
+
 	case C.DUCKDB_TYPE_TINYINT:
 		// Extract all int8 values in the batch
 		for i := 0; i < batchSize; i++ {
@@ -294,7 +294,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 				vector.int8Data[i] = int8(val)
 			}
 		}
-		
+
 	case C.DUCKDB_TYPE_SMALLINT:
 		// Extract all int16 values in the batch
 		for i := 0; i < batchSize; i++ {
@@ -304,7 +304,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 				vector.int16Data[i] = int16(val)
 			}
 		}
-		
+
 	case C.DUCKDB_TYPE_INTEGER:
 		// Extract all int32 values in the batch
 		for i := 0; i < batchSize; i++ {
@@ -314,7 +314,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 				vector.int32Data[i] = int32(val)
 			}
 		}
-		
+
 	case C.DUCKDB_TYPE_BIGINT:
 		// Extract all int64 values in the batch
 		for i := 0; i < batchSize; i++ {
@@ -324,7 +324,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 				vector.int64Data[i] = int64(val)
 			}
 		}
-		
+
 	case C.DUCKDB_TYPE_FLOAT:
 		// Extract all float32 values in the batch
 		for i := 0; i < batchSize; i++ {
@@ -334,7 +334,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 				vector.float32Data[i] = float32(val)
 			}
 		}
-		
+
 	case C.DUCKDB_TYPE_DOUBLE:
 		// Extract all float64 values in the batch
 		for i := 0; i < batchSize; i++ {
@@ -344,7 +344,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 				vector.float64Data[i] = float64(val)
 			}
 		}
-		
+
 	case C.DUCKDB_TYPE_VARCHAR:
 		// Extract all string values in the batch
 		for i := 0; i < batchSize; i++ {
@@ -359,7 +359,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 				}
 			}
 		}
-		
+
 	case C.DUCKDB_TYPE_BLOB:
 		// Extract all blob values in the batch
 		for i := 0; i < batchSize; i++ {
@@ -380,7 +380,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 				}
 			}
 		}
-		
+
 	default:
 		// For other types, convert to string for now
 		// This can be optimized further for specific types
@@ -401,14 +401,14 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 
 // BatchRows implements database/sql's Rows interface but with batch processing
 type BatchRows struct {
-	query         *BatchQuery
-	columnCount   int
-	
+	query       *BatchQuery
+	columnCount int
+
 	// Current position
-	rowInBatch     int
-	
+	rowInBatch int
+
 	// Driver value buffer for reuse
-	valueBuffer   []driver.Value
+	valueBuffer []driver.Value
 }
 
 // NewBatchRows creates a new BatchRows from a BatchQuery
@@ -441,7 +441,7 @@ func (br *BatchRows) Next(dest []driver.Value) error {
 	if br.query == nil {
 		return io.EOF
 	}
-	
+
 	// Check if we need a new batch
 	if br.rowInBatch >= br.query.batchAvailable {
 		// Try to fetch the next batch
@@ -450,17 +450,17 @@ func (br *BatchRows) Next(dest []driver.Value) error {
 		}
 		br.rowInBatch = 0
 	}
-	
+
 	// Get row data from current batch
 	for i := 0; i < br.columnCount && i < len(dest); i++ {
 		vector := br.query.vectors[i]
-		
+
 		// Check for NULL
 		if vector.nullMap[br.rowInBatch] {
 			dest[i] = nil
 			continue
 		}
-		
+
 		// Extract value based on column type
 		switch br.query.columnTypes[i] {
 		case C.DUCKDB_TYPE_BOOLEAN:
@@ -493,7 +493,7 @@ func (br *BatchRows) Next(dest []driver.Value) error {
 			dest[i] = vector.timeData[br.rowInBatch]
 		}
 	}
-	
+
 	// Move to next row in the batch
 	br.rowInBatch++
 	return nil
@@ -504,30 +504,30 @@ func (conn *Connection) QueryBatch(query string, batchSize int) (*BatchRows, err
 	if batchSize <= 0 {
 		batchSize = DefaultBatchSize
 	}
-	
+
 	// Prepare the query string
 	cQuery := cString(query)
 	defer freeString(cQuery)
-	
+
 	// Execute the query
 	var result C.duckdb_result
 	if err := C.duckdb_query(*conn.conn, cQuery, &result); err == C.DuckDBError {
 		return nil, fmt.Errorf("failed to execute query: %s", goString(C.duckdb_result_error(&result)))
 	}
-	
+
 	// Create a batch query
 	batchQuery := NewBatchQuery(&result, batchSize)
-	
+
 	// Create batch rows
 	return NewBatchRows(batchQuery), nil
 }
 
 // BatchStmt is a prepared statement that uses batch processing
 type BatchStmt struct {
-	conn      *Connection
-	stmt      *C.duckdb_prepared_statement
+	conn       *Connection
+	stmt       *C.duckdb_prepared_statement
 	paramCount int
-	batchSize int
+	batchSize  int
 }
 
 // NewBatchStmt creates a new batch-oriented prepared statement
@@ -535,18 +535,18 @@ func NewBatchStmt(conn *Connection, query string, batchSize int) (*BatchStmt, er
 	if batchSize <= 0 {
 		batchSize = DefaultBatchSize
 	}
-	
+
 	cQuery := cString(query)
 	defer freeString(cQuery)
-	
+
 	var stmt C.duckdb_prepared_statement
 	if err := C.duckdb_prepare(*conn.conn, cQuery, &stmt); err == C.DuckDBError {
 		return nil, fmt.Errorf("failed to prepare statement: %s", goString(C.duckdb_prepare_error(stmt)))
 	}
-	
+
 	// Get parameter count
 	paramCount := int(C.duckdb_nparams(stmt))
-	
+
 	return &BatchStmt{
 		conn:       conn,
 		stmt:       &stmt,
@@ -569,23 +569,23 @@ func (bs *BatchStmt) QueryBatch(args ...interface{}) (*BatchRows, error) {
 	if bs.stmt == nil {
 		return nil, errors.New("statement is closed")
 	}
-	
+
 	// Bind parameters
 	if len(args) != bs.paramCount {
 		return nil, fmt.Errorf("expected %d parameters, got %d", bs.paramCount, len(args))
 	}
-	
+
 	// Bind each parameter
 	for i, arg := range args {
 		idx := C.idx_t(i + 1) // Parameters are 1-indexed
-		
+
 		if arg == nil {
 			if err := C.duckdb_bind_null(*bs.stmt, idx); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind NULL parameter at index %d", i)
 			}
 			continue
 		}
-		
+
 		// Bind based on type
 		switch v := arg.(type) {
 		case bool:
@@ -596,74 +596,74 @@ func (bs *BatchStmt) QueryBatch(args ...interface{}) (*BatchRows, error) {
 			if err := C.duckdb_bind_int8(*bs.stmt, idx, val); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind boolean parameter at index %d", i)
 			}
-			
+
 		case int8:
 			if err := C.duckdb_bind_int8(*bs.stmt, idx, C.int8_t(v)); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind int8 parameter at index %d", i)
 			}
-			
+
 		case int16:
 			if err := C.duckdb_bind_int16(*bs.stmt, idx, C.int16_t(v)); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind int16 parameter at index %d", i)
 			}
-			
+
 		case int32:
 			if err := C.duckdb_bind_int32(*bs.stmt, idx, C.int32_t(v)); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind int32 parameter at index %d", i)
 			}
-			
+
 		case int:
 			if err := C.duckdb_bind_int64(*bs.stmt, idx, C.int64_t(v)); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind int parameter at index %d", i)
 			}
-			
+
 		case int64:
 			if err := C.duckdb_bind_int64(*bs.stmt, idx, C.int64_t(v)); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind int64 parameter at index %d", i)
 			}
-			
+
 		case uint8:
 			if err := C.duckdb_bind_uint8(*bs.stmt, idx, C.uint8_t(v)); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind uint8 parameter at index %d", i)
 			}
-			
+
 		case uint16:
 			if err := C.duckdb_bind_uint16(*bs.stmt, idx, C.uint16_t(v)); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind uint16 parameter at index %d", i)
 			}
-			
+
 		case uint32:
 			if err := C.duckdb_bind_uint32(*bs.stmt, idx, C.uint32_t(v)); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind uint32 parameter at index %d", i)
 			}
-			
+
 		case uint:
 			if err := C.duckdb_bind_uint64(*bs.stmt, idx, C.uint64_t(v)); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind uint parameter at index %d", i)
 			}
-			
+
 		case uint64:
 			if err := C.duckdb_bind_uint64(*bs.stmt, idx, C.uint64_t(v)); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind uint64 parameter at index %d", i)
 			}
-			
+
 		case float32:
 			if err := C.duckdb_bind_float(*bs.stmt, idx, C.float(v)); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind float32 parameter at index %d", i)
 			}
-			
+
 		case float64:
 			if err := C.duckdb_bind_double(*bs.stmt, idx, C.double(v)); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind float64 parameter at index %d", i)
 			}
-			
+
 		case string:
 			cStr := cString(v)
 			defer freeString(cStr)
 			if err := C.duckdb_bind_varchar(*bs.stmt, idx, cStr); err == C.DuckDBError {
 				return nil, fmt.Errorf("failed to bind string parameter at index %d", i)
 			}
-			
+
 		case []byte:
 			if len(v) == 0 {
 				if err := C.duckdb_bind_blob(*bs.stmt, idx, unsafe.Pointer(&[]byte{0}[0]), C.idx_t(0)); err == C.DuckDBError {
@@ -674,21 +674,21 @@ func (bs *BatchStmt) QueryBatch(args ...interface{}) (*BatchRows, error) {
 					return nil, fmt.Errorf("failed to bind blob parameter at index %d", i)
 				}
 			}
-			
+
 		default:
 			return nil, fmt.Errorf("unsupported parameter type %T at index %d", v, i)
 		}
 	}
-	
+
 	// Execute statement
 	var result C.duckdb_result
 	if err := C.duckdb_execute_prepared(*bs.stmt, &result); err == C.DuckDBError {
 		return nil, fmt.Errorf("failed to execute statement: %s", goString(C.duckdb_result_error(&result)))
 	}
-	
+
 	// Create batch query
 	batchQuery := NewBatchQuery(&result, bs.batchSize)
-	
+
 	// Create batch rows
 	return NewBatchRows(batchQuery), nil
 }

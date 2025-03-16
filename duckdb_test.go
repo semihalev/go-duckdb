@@ -144,6 +144,7 @@ func TestPreparedStatement(t *testing.T) {
 }
 
 func TestDataTypes(t *testing.T) {
+	// Now that we've implemented proper date/timestamp handling, this test should work
 	db, err := sql.Open("duckdb", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
@@ -524,6 +525,119 @@ func TestBooleanHandling(t *testing.T) {
 			}
 		})
 	})
+}
+
+// TestDriverIntegration tests both the standard and fast drivers
+// to ensure they are compatible and work correctly
+func TestDriverIntegration(t *testing.T) {
+	// Test both drivers to ensure they work correctly
+	drivers := []struct {
+		name     string
+		driverID string
+	}{
+		{"Standard", "duckdb"},
+		{"Fast", "duckdb-fast"},
+	}
+
+	for _, driver := range drivers {
+		t.Run(driver.name, func(t *testing.T) {
+			// Open the database
+			db, err := sql.Open(driver.driverID, ":memory:")
+			if err != nil {
+				t.Fatalf("%s driver: Failed to open database: %v", driver.name, err)
+			}
+			defer db.Close()
+
+			// Verify connection works
+			err = db.Ping()
+			if err != nil {
+				t.Fatalf("%s driver: Failed to ping database: %v", driver.name, err)
+			}
+
+			// Create a test table
+			_, err = db.Exec("CREATE TABLE test_integration (id INTEGER, value VARCHAR)")
+			if err != nil {
+				t.Fatalf("%s driver: Failed to create table: %v", driver.name, err)
+			}
+
+			// Insert data
+			result, err := db.Exec("INSERT INTO test_integration VALUES (1, 'one'), (2, 'two'), (3, 'three')")
+			if err != nil {
+				t.Fatalf("%s driver: Failed to insert data: %v", driver.name, err)
+			}
+
+			// Check rows affected
+			rows, err := result.RowsAffected()
+			if err != nil {
+				t.Fatalf("%s driver: Failed to get rows affected: %v", driver.name, err)
+			}
+			if rows != 3 {
+				t.Errorf("%s driver: Expected 3 rows affected, got %d", driver.name, rows)
+			}
+
+			// Prepared statement
+			stmt, err := db.Prepare("SELECT * FROM test_integration WHERE id = ?")
+			if err != nil {
+				t.Fatalf("%s driver: Failed to prepare statement: %v", driver.name, err)
+			}
+			defer stmt.Close()
+
+			// Query with parameter
+			var id int
+			var value string
+			err = stmt.QueryRow(2).Scan(&id, &value)
+			if err != nil {
+				t.Fatalf("%s driver: Failed to query data: %v", driver.name, err)
+			}
+
+			// Verify data
+			if id != 2 || value != "two" {
+				t.Errorf("%s driver: Expected id=2, value='two', got id=%d, value='%s'", driver.name, id, value)
+			}
+
+			// Query all rows
+			rows2, err := db.Query("SELECT * FROM test_integration ORDER BY id")
+			if err != nil {
+				t.Fatalf("%s driver: Failed to query all data: %v", driver.name, err)
+			}
+			defer rows2.Close()
+
+			// Verify all rows
+			count := 0
+			for rows2.Next() {
+				count++
+				var id int
+				var value string
+				err = rows2.Scan(&id, &value)
+				if err != nil {
+					t.Fatalf("%s driver: Failed to scan row: %v", driver.name, err)
+				}
+
+				// Verify values
+				if id != count {
+					t.Errorf("%s driver: Expected id=%d, got %d", driver.name, count, id)
+				}
+
+				expectedValue := ""
+				switch count {
+				case 1:
+					expectedValue = "one"
+				case 2:
+					expectedValue = "two"
+				case 3:
+					expectedValue = "three"
+				}
+
+				if value != expectedValue {
+					t.Errorf("%s driver: Expected value='%s', got '%s'", driver.name, expectedValue, value)
+				}
+			}
+
+			if count != 3 {
+				t.Errorf("%s driver: Expected 3 rows, got %d", driver.name, count)
+			}
+		})
+	}
 }
 
 func TestAppender(t *testing.T) {

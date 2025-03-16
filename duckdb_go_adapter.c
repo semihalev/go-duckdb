@@ -12,7 +12,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include "duckdb.h"
+#include "include/duckdb.h"
 
 // Include our adapter header
 #include "duckdb_go_adapter.h"
@@ -23,10 +23,172 @@ static int grow_string_buffer(result_buffer_t* buffer, int64_t additional_size);
 static int process_column_data(duckdb_result* result, result_buffer_t* buffer);
 static int64_t copy_strings_to_buffer(duckdb_result* result, int32_t col, result_buffer_t* buffer);
 
+// Helper functions for boolean conversion - these avoid CGO type conversion issues
+// Use int8_t consistently for all boolean values in the Go interface
+static inline int8_t duckdb_bool_to_int8(bool value) {
+    return value ? 1 : 0;
+}
+
+// Create specialized conversion functions for each bool usage context
+// This helps with CGO type conversion issues by being explicit about the context
+static inline int8_t convert_null_value(bool is_null) {
+    return is_null ? 1 : 0;
+}
+
+static inline int8_t convert_boolean_value(bool value) {
+    return value ? 1 : 0;
+}
+
+// Convert DuckDB's boolean return value to int8_t for consistent handling
+static inline int8_t convert_duckdb_boolean(bool value) {
+    return value ? 1 : 0;
+}
+
+/**
+ * Date and timestamp helper functions
+ * These provide efficient conversion between DuckDB's date/timestamp representation and Unix time
+ */
+
+// Convert DuckDB date (days since 1970-01-01) to Unix timestamp at UTC midnight
+static inline int64_t duckdb_date_to_unix_seconds(duckdb_date date) {
+    // Convert days to seconds (86400 seconds per day)
+    return (int64_t)date.days * 86400;
+}
+
+// Convert DuckDB timestamp (microseconds since 1970-01-01) to Unix timestamp with microsecond precision
+static inline int64_t duckdb_timestamp_to_unix_micros(duckdb_timestamp ts) {
+    return ts.micros;
+}
+
+// Convert DuckDB timestamp_s (seconds since 1970-01-01) to Unix timestamp with microsecond precision
+static inline int64_t duckdb_timestamp_s_to_unix_micros(duckdb_timestamp_s ts) {
+    return (int64_t)ts.seconds * 1000000; // Convert seconds to microseconds
+}
+
+// Convert DuckDB timestamp_ms (milliseconds since 1970-01-01) to Unix timestamp with microsecond precision
+static inline int64_t duckdb_timestamp_ms_to_unix_micros(duckdb_timestamp_ms ts) {
+    return (int64_t)ts.millis * 1000; // Convert milliseconds to microseconds
+}
+
+// Convert DuckDB timestamp_ns (nanoseconds since 1970-01-01) to Unix timestamp with microsecond precision
+static inline int64_t duckdb_timestamp_ns_to_unix_micros(duckdb_timestamp_ns ts) {
+    return ts.nanos / 1000; // Convert nanoseconds to microseconds
+}
+
+// Extract date and time components from a DuckDB timestamp
+static inline void duckdb_extract_timestamp_components(duckdb_timestamp ts, int64_t* unix_seconds, int32_t* nanos) {
+    *unix_seconds = ts.micros / 1000000;
+    *nanos = (ts.micros % 1000000) * 1000;
+}
+
+// We already declared temporal_data_t in the header file
+
 /**
  * Execute a query and store the entire result set in a single operation
  * This dramatically reduces CGO boundary crossings
  */
+// Process date column data and store as seconds since epoch
+static int process_date_column(duckdb_result* result, int32_t col, int64_t row_count, result_buffer_t* buffer) {
+    // Allocate array for date data (int64_t for seconds since epoch)
+    int64_t* date_data = calloc(row_count, sizeof(int64_t));
+    if (!date_data) {
+        buffer->error_code = 20;
+        buffer->error_message = strdup("Failed to allocate date data memory");
+        return 0;
+    }
+    
+    // Add to resources for cleanup
+    buffer->resources[buffer->resource_count++] = date_data;
+    
+    // Get date values for each row
+    for (int64_t row = 0; row < row_count; row++) {
+        // Skip NULL values (already handled in nulls bitmap)
+        if (buffer->nulls_ptrs[col][row]) {
+            continue;
+        }
+        
+        // Get date value and convert to seconds since epoch
+        duckdb_date date = duckdb_value_date(result, col, row);
+        date_data[row] = duckdb_date_to_unix_seconds(date);
+    }
+    
+    // Store date data in temporal data structure
+    if (!buffer->temporal_data) {
+        buffer->temporal_data = calloc(1, sizeof(temporal_data_t));
+        if (!buffer->temporal_data) {
+            buffer->error_code = 21;
+            buffer->error_message = strdup("Failed to allocate temporal data structure");
+            return 0;
+        }
+        buffer->resources[buffer->resource_count++] = buffer->temporal_data;
+    }
+    
+    buffer->temporal_data->date_data = date_data;
+    buffer->temporal_data->has_date_data = 1;
+    
+    // Store the date data pointer in the data_ptrs array as well
+    buffer->data_ptrs[col] = date_data;
+    
+    return 1;
+}
+
+// Process timestamp column data and store as seconds + nanoseconds
+static int process_timestamp_column(duckdb_result* result, int32_t col, int64_t row_count, result_buffer_t* buffer) {
+    // Allocate arrays for timestamp data
+    int64_t* seconds_data = calloc(row_count, sizeof(int64_t));
+    int32_t* nanos_data = calloc(row_count, sizeof(int32_t));
+    
+    if (!seconds_data || !nanos_data) {
+        if (seconds_data) free(seconds_data);
+        if (nanos_data) free(nanos_data);
+        buffer->error_code = 22;
+        buffer->error_message = strdup("Failed to allocate timestamp data memory");
+        return 0;
+    }
+    
+    // Add to resources for cleanup
+    buffer->resources[buffer->resource_count++] = seconds_data;
+    buffer->resources[buffer->resource_count++] = nanos_data;
+    
+    // Get timestamp values for each row
+    for (int64_t row = 0; row < row_count; row++) {
+        // Skip NULL values (already handled in nulls bitmap)
+        if (buffer->nulls_ptrs[col][row]) {
+            continue;
+        }
+        
+        // Get timestamp value and extract components
+        duckdb_timestamp ts = duckdb_value_timestamp(result, col, row);
+        int64_t unix_seconds;
+        int32_t nanos;
+        duckdb_extract_timestamp_components(ts, &unix_seconds, &nanos);
+        
+        seconds_data[row] = unix_seconds;
+        nanos_data[row] = nanos;
+    }
+    
+    // Store timestamp data in temporal data structure
+    if (!buffer->temporal_data) {
+        buffer->temporal_data = calloc(1, sizeof(temporal_data_t));
+        if (!buffer->temporal_data) {
+            buffer->error_code = 21;
+            buffer->error_message = strdup("Failed to allocate temporal data structure");
+            return 0;
+        }
+        buffer->resources[buffer->resource_count++] = buffer->temporal_data;
+    }
+    
+    buffer->temporal_data->timestamp_seconds = seconds_data;
+    buffer->temporal_data->timestamp_nanos = nanos_data;
+    buffer->temporal_data->has_timestamp_data = 1;
+    
+    // Store the timestamp seconds data pointer in the data_ptrs array
+    // The nanos data is accessible through the temporal_data structure
+    buffer->data_ptrs[col] = seconds_data;
+    
+    return 1;
+}
+
 int execute_query_vectorized(duckdb_connection connection, const char* query, result_buffer_t* buffer) {
     if (!connection || !query || !buffer) {
         return 0; // Invalid parameters
@@ -47,6 +209,9 @@ int execute_query_vectorized(duckdb_connection connection, const char* query, re
     // Get basic metadata
     buffer->row_count = duckdb_row_count(&result);
     buffer->column_count = duckdb_column_count(&result);
+    
+    // Get affected rows count for DML statements
+    buffer->rows_affected = duckdb_rows_changed(&result);
     
     // Early return for empty result sets
     if (buffer->row_count == 0 || buffer->column_count == 0) {
@@ -128,9 +293,11 @@ static int process_column_data(duckdb_result* result, result_buffer_t* buffer) {
         }
         buffer->resources[buffer->resource_count++] = buffer->nulls_ptrs[col];
         
-        // Extract NULL information first
+        // Extract NULL information first - convert bool to int8_t for CGO compatibility
         for (int64_t row = 0; row < row_count; row++) {
-            buffer->nulls_ptrs[col][row] = duckdb_value_is_null(result, col, row);
+            // Convert from C bool to int8_t (0 or 1) for CGO compatibility
+            bool is_null = duckdb_value_is_null(result, col, row);
+            buffer->nulls_ptrs[col][row] = convert_null_value(is_null);
         }
         
         // Process based on column type
@@ -146,11 +313,31 @@ static int process_column_data(duckdb_result* result, result_buffer_t* buffer) {
                 buffer->resources[buffer->resource_count++] = data;
                 buffer->data_ptrs[col] = data;
                 
-                // Extract all values at once
+                // Extract all values at once - convert bool to int8_t for CGO compatibility
                 for (int64_t row = 0; row < row_count; row++) {
                     if (!buffer->nulls_ptrs[col][row]) {
-                        data[row] = duckdb_value_boolean(result, col, row);
+                        bool value = duckdb_value_boolean(result, col, row);
+                        data[row] = convert_boolean_value(value);
                     }
+                }
+                break;
+            }
+            
+            case DUCKDB_TYPE_DATE: {
+                // Use specialized handler for date type
+                if (!process_date_column(result, col, row_count, buffer)) {
+                    return 0;
+                }
+                break;
+            }
+            
+            case DUCKDB_TYPE_TIMESTAMP:
+            case DUCKDB_TYPE_TIMESTAMP_S:
+            case DUCKDB_TYPE_TIMESTAMP_MS:
+            case DUCKDB_TYPE_TIMESTAMP_NS: {
+                // Use specialized handler for timestamp types
+                if (!process_timestamp_column(result, col, row_count, buffer)) {
+                    return 0;
                 }
                 break;
             }
@@ -452,6 +639,9 @@ int execute_prepared_vectorized(duckdb_prepared_statement statement,
     // Get basic metadata
     buffer->row_count = duckdb_row_count(&result);
     buffer->column_count = duckdb_column_count(&result);
+    
+    // Get affected rows count for DML statements
+    buffer->rows_affected = duckdb_rows_changed(&result);
     
     // Early return for empty result sets
     if (buffer->row_count == 0 || buffer->column_count == 0) {

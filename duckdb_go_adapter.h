@@ -6,7 +6,7 @@
 #define DUCKDB_GO_ADAPTER_H
 
 #include <stdint.h>
-#include "duckdb.h"
+#include "include/duckdb.h"
 
 // Column metadata structure
 typedef struct {
@@ -15,6 +15,20 @@ typedef struct {
     int32_t physical_type;
     int32_t nullable;
 } column_meta_t;
+
+// Temporal data structure for date/timestamp handling
+typedef struct {
+    // Date data (seconds since epoch for each date value)
+    int64_t* date_data;
+    
+    // Timestamp data (seconds and nanoseconds parts for each timestamp value)
+    int64_t* timestamp_seconds;
+    int32_t* timestamp_nanos;
+    
+    // Flags to indicate whether these arrays were allocated
+    int8_t has_date_data;
+    int8_t has_timestamp_data;
+} temporal_data_t;
 
 // Buffer metadata structure
 typedef struct {
@@ -31,6 +45,12 @@ typedef struct {
     // Keep track of string data for cleanup
     char* string_buffer;
     int64_t string_buffer_size;
+    
+    // For tracking affected rows in DML statements
+    int64_t rows_affected;
+    
+    // Temporal data storage (date/timestamp)
+    temporal_data_t* temporal_data;
     
     // For memory cleanup
     void** resources;

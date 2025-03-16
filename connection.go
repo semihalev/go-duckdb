@@ -25,13 +25,26 @@ type Connection struct {
 	conn   *C.duckdb_connection
 	closed int32
 	mu     sync.Mutex
+
+	// Configuration for using fast driver
+	useFastDriver bool
 }
 
 // NamedValue is used for parameter binding with a name.
 type NamedValue = driver.NamedValue
 
+// ConnectionOption represents an option for configuring a DuckDB connection
+type ConnectionOption func(*Connection)
+
+// WithFastDriver enables the high-performance fast driver implementation
+func WithFastDriver() ConnectionOption {
+	return func(c *Connection) {
+		c.useFastDriver = true
+	}
+}
+
 // NewConnection creates a new connection to the DuckDB database.
-func NewConnection(path string) (*Connection, error) {
+func NewConnection(path string, options ...ConnectionOption) (*Connection, error) {
 	var db C.duckdb_database
 	var conn C.duckdb_connection
 
@@ -50,8 +63,14 @@ func NewConnection(path string) (*Connection, error) {
 	}
 
 	c := &Connection{
-		db:   &db,
-		conn: &conn,
+		db:            &db,
+		conn:          &conn,
+		useFastDriver: true, // Always use fast driver
+	}
+
+	// Apply all options
+	for _, option := range options {
+		option(c)
 	}
 
 	// Set finalizer to ensure connection is closed when garbage collected
@@ -122,15 +141,11 @@ func (c *Connection) PrepareContext(ctx context.Context, query string) (driver.S
 		return nil, driver.ErrBadConn
 	}
 
+	// Always use fast driver implementation
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	stmt, err := newStatement(c, query)
-	if err != nil {
-		return nil, err
-	}
-
-	return stmt, nil
+	return c.FastPrepare(query)
 }
 
 // ExecContext executes a query without returning any rows.
@@ -139,127 +154,24 @@ func (c *Connection) ExecContext(ctx context.Context, query string, args []drive
 		return nil, driver.ErrBadConn
 	}
 
+	// Always use the fast implementation
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Use the fast exec implementation for better performance
-	// We still need a version that tracks rows affected which the standard API doesn't provide
-	
-	// Prepare the query string
-	cQuery := cString(query)
-	defer freeString(cQuery)
-
-	// Check if we have parameters - if so, use prepared statement
-	if len(args) > 0 {
-		// Use a prepared statement
-		var stmt C.duckdb_prepared_statement
-		if err := C.duckdb_prepare(*c.conn, cQuery, &stmt); err == C.DuckDBError {
-			return nil, fmt.Errorf("failed to prepare statement: %s", goString(C.duckdb_prepare_error(stmt)))
-		}
-		defer C.duckdb_destroy_prepare(&stmt)
-
-		// Bind parameters
-		if err := bindParameters(&stmt, args); err != nil {
-			return nil, err
-		}
-
-		// Execute statement
-		var result C.duckdb_result
-		if err := C.duckdb_execute_prepared(stmt, &result); err == C.DuckDBError {
-			return nil, fmt.Errorf("failed to execute statement: %s", goString(C.duckdb_result_error(&result)))
-		}
-		defer C.duckdb_destroy_result(&result)
-
-		// Get affected rows
-		rowsAffected := C.duckdb_rows_changed(&result)
-
-		return &Result{
-			rowsAffected: int64(rowsAffected),
-			lastInsertID: 0, // DuckDB doesn't support last insert ID
-		}, nil
-	} else {
-		// Direct query execution
-		var result C.duckdb_result
-		if err := C.duckdb_query(*c.conn, cQuery, &result); err == C.DuckDBError {
-			return nil, fmt.Errorf("failed to execute query: %s", goString(C.duckdb_result_error(&result)))
-		}
-		defer C.duckdb_destroy_result(&result)
-
-		// Get affected rows
-		rowsAffected := C.duckdb_rows_changed(&result)
-
-		return &Result{
-			rowsAffected: int64(rowsAffected),
-			lastInsertID: 0, // DuckDB doesn't support last insert ID
-		}, nil
-	}
+	return c.FastExecContext(ctx, query, args)
 }
 
 // QueryContext executes a query with the provided context.
-// It uses buffer pooling to minimize allocations.
 func (c *Connection) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	if atomic.LoadInt32(&c.closed) != 0 {
 		return nil, driver.ErrBadConn
 	}
 
+	// Always use fast driver implementation
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Prepare the query string
-	cQuery := cString(query)
-	defer freeString(cQuery)
-
-	// Get a result set wrapper from the pool
-	// The wrapper comes pre-allocated and ready to use
-	wrapper := globalBufferPool.GetResultSetWrapper()
-
-	// Check if we have parameters - if so, use prepared statement
-	if len(args) > 0 {
-		// Use a prepared statement
-		var stmt C.duckdb_prepared_statement
-		if err := C.duckdb_prepare(*c.conn, cQuery, &stmt); err == C.DuckDBError {
-			globalBufferPool.PutResultSetWrapper(wrapper) // Return wrapper to pool
-			return nil, fmt.Errorf("failed to prepare statement: %s", goString(C.duckdb_prepare_error(stmt)))
-		}
-
-		// Bind parameters
-		if err := bindParameters(&stmt, args); err != nil {
-			C.duckdb_destroy_prepare(&stmt)
-			globalBufferPool.PutResultSetWrapper(wrapper)
-			return nil, err
-		}
-
-		// Execute statement with pooled result - pass by address since it's a struct now
-		if err := C.duckdb_execute_prepared(stmt, &wrapper.result); err == C.DuckDBError {
-			C.duckdb_destroy_prepare(&stmt)
-
-			// Get error message before returning wrapper to pool
-			errorMsg := goString(C.duckdb_result_error(&wrapper.result))
-			globalBufferPool.PutResultSetWrapper(wrapper)
-
-			return nil, fmt.Errorf("failed to execute statement: %s", errorMsg)
-		}
-
-		// Clean up the prepared statement as we don't need it anymore
-		C.duckdb_destroy_prepare(&stmt)
-
-		// Create rows with the result wrapper
-		// The Rows object will be responsible for returning the wrapper to the pool
-		return newRowsWithWrapper(wrapper), nil
-	} else {
-		// Direct query execution with pooled result - pass by address since it's a struct now
-		if err := C.duckdb_query(*c.conn, cQuery, &wrapper.result); err == C.DuckDBError {
-			// Get error message before returning wrapper to pool
-			errorMsg := goString(C.duckdb_result_error(&wrapper.result))
-			globalBufferPool.PutResultSetWrapper(wrapper)
-
-			return nil, fmt.Errorf("failed to execute query: %s", errorMsg)
-		}
-
-		// Create rows with the pooled wrapper
-		// The Rows object will be responsible for returning the wrapper to the pool
-		return newRowsWithWrapper(wrapper), nil
-	}
+	return c.FastQueryContext(ctx, query, args)
 }
 
 // Ping verifies a connection to the database is still alive.

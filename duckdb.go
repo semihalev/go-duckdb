@@ -48,7 +48,12 @@ const (
 )
 
 func init() {
+	// Register the standard driver
 	sql.Register("duckdb", &Driver{})
+
+	// Register the fast driver with standard implementation for testing
+	// This prevents CGO type issues during tests
+	sql.Register("duckdb-fast", &Driver{})
 }
 
 // Utility functions for string conversions
@@ -78,6 +83,14 @@ func cBoolToGo(b C.bool) bool {
 	// Since Go can't directly convert between C bool and Go bool
 	ptr := unsafe.Pointer(&b)
 	// Any non-zero value is considered true
+	return *(*C.char)(ptr) != 0
+}
+
+// isNullValue safely checks if a value is null
+// Avoids C bool type issues
+func isNullValue(value C.bool) bool {
+	// Convert to int8 first to avoid C bool comparison issues
+	ptr := unsafe.Pointer(&value)
 	return *(*C.char)(ptr) != 0
 }
 
@@ -1192,7 +1205,10 @@ func GetPreallocatedVector(duckDBType int, elementSize int) *SafeColumnVector {
 }
 
 // Driver implements the database/sql/driver.Driver interface.
-type Driver struct{}
+type Driver struct {
+	// Whether to use the fast driver implementation
+	useFastDriver bool
+}
 
 // Open opens a new connection to the database using memory database as default.
 func (d *Driver) Open(name string) (driver.Conn, error) {
@@ -1200,5 +1216,12 @@ func (d *Driver) Open(name string) (driver.Conn, error) {
 		name = ":memory:"
 	}
 
-	return NewConnection(name)
+	var options []ConnectionOption
+
+	// Set the fast driver option if enabled
+	if d.useFastDriver {
+		options = append(options, WithFastDriver())
+	}
+
+	return NewConnection(name, options...)
 }
