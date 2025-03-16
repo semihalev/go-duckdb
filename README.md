@@ -10,12 +10,15 @@ A zero-allocation, high-performance, zero-dependency SQL driver for DuckDB in Go
 
 - Zero allocation (minimizes GC pressure)
 - High performance with Go 1.23 generics
+- Memory-optimized with tiered buffer pools and string caching
 - Thread-safe with atomic operations
 - Zero Go dependencies
 - Follows database/sql interfaces
 - Full support for DuckDB types
 - Transactions with proper isolation
 - Context cancellation throughout API
+
+See [OPTIMIZATION.md](OPTIMIZATION.md) for details on the memory optimization techniques used.
 
 ## DuckDB 1.2.1 Compatibility
 

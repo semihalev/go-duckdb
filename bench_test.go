@@ -10,18 +10,18 @@ import (
 
 func BenchmarkConnection(b *testing.B) {
 	b.ReportAllocs()
-	
+
 	for i := 0; i < b.N; i++ {
 		db, err := sql.Open("duckdb", ":memory:")
 		if err != nil {
 			b.Fatalf("failed to open database: %v", err)
 		}
-		
+
 		err = db.Ping()
 		if err != nil {
 			b.Fatalf("failed to ping database: %v", err)
 		}
-		
+
 		db.Close()
 	}
 }
@@ -32,28 +32,28 @@ func BenchmarkSimpleRead(b *testing.B) {
 		b.Fatalf("failed to open database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Create a simple table with one value
 	_, err = db.Exec("CREATE TABLE simple (val INTEGER)")
 	if err != nil {
 		b.Fatalf("failed to create table: %v", err)
 	}
-	
+
 	_, err = db.Exec("INSERT INTO simple VALUES (42)")
 	if err != nil {
 		b.Fatalf("failed to insert data: %v", err)
 	}
-	
+
 	b.ResetTimer()
 	b.ReportAllocs()
-	
+
 	for i := 0; i < b.N; i++ {
 		var val int
 		err := db.QueryRow("SELECT val FROM simple").Scan(&val)
 		if err != nil {
 			b.Fatalf("failed to read value: %v", err)
 		}
-		
+
 		if val != 42 {
 			b.Fatalf("expected 42, got %d", val)
 		}
@@ -66,35 +66,35 @@ func BenchmarkPreparedRead(b *testing.B) {
 		b.Fatalf("failed to open database: %v", err)
 	}
 	defer db.Close()
-	
+
 	// Create a simple table with one value
 	_, err = db.Exec("CREATE TABLE simple (val INTEGER)")
 	if err != nil {
 		b.Fatalf("failed to create table: %v", err)
 	}
-	
+
 	_, err = db.Exec("INSERT INTO simple VALUES (42)")
 	if err != nil {
 		b.Fatalf("failed to insert data: %v", err)
 	}
-	
+
 	// Prepare statement
 	stmt, err := db.Prepare("SELECT val FROM simple")
 	if err != nil {
 		b.Fatalf("failed to prepare statement: %v", err)
 	}
 	defer stmt.Close()
-	
+
 	b.ResetTimer()
 	b.ReportAllocs()
-	
+
 	for i := 0; i < b.N; i++ {
 		var val int
 		err := stmt.QueryRow().Scan(&val)
 		if err != nil {
 			b.Fatalf("failed to read value: %v", err)
 		}
-		
+
 		if val != 42 {
 			b.Fatalf("expected 42, got %d", val)
 		}
@@ -162,9 +162,8 @@ func BenchmarkInsertPrepared(b *testing.B) {
 }
 
 func BenchmarkInsertAppender(b *testing.B) {
-	// Skip this benchmark for now as we're focusing on simpler tests first
-	b.Skip("Skipping appender benchmark until fixed")
-	
+	// Test the appender with boolean support
+
 	conn, err := NewConnection(":memory:")
 	if err != nil {
 		b.Fatalf("failed to open connection: %v", err)
@@ -204,9 +203,8 @@ func BenchmarkInsertAppender(b *testing.B) {
 }
 
 func BenchmarkBulkInsertAppender(b *testing.B) {
-	// Skip this benchmark for now as we're focusing on simpler tests first
-	b.Skip("Skipping bulk appender benchmark until fixed")
-	
+	// Test bulk appender with boolean support
+
 	conn, err := NewConnection(":memory:")
 	if err != nil {
 		b.Fatalf("failed to open connection: %v", err)
@@ -263,14 +261,14 @@ func BenchmarkQueryRows(b *testing.B) {
 	rowsCount := 1000 // Reduced to 1000 for quicker setup
 	var sb strings.Builder
 	sb.WriteString("INSERT INTO benchmark VALUES ")
-	
+
 	for i := 0; i < rowsCount; i++ {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
 		sb.WriteString(fmt.Sprintf("(%d, 'name-%d', %f)", i, i, float64(i)))
 	}
-	
+
 	_, err = db.Exec(sb.String())
 	if err != nil {
 		b.Fatalf("failed to insert data: %v", err)
@@ -291,7 +289,7 @@ func BenchmarkQueryRows(b *testing.B) {
 		var id int
 		var name string
 		var value float64
-        
+
 		for rows.Next() {
 			if err := rows.Scan(&id, &name, &value); err != nil {
 				rows.Close()
@@ -328,19 +326,19 @@ func BenchmarkQueryRowsPrepared(b *testing.B) {
 	rowsCount := 1000 // Reduced to 1000 for quicker setup
 	var sb strings.Builder
 	sb.WriteString("INSERT INTO benchmark VALUES ")
-	
+
 	for i := 0; i < rowsCount; i++ {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
 		sb.WriteString(fmt.Sprintf("(%d, 'name-%d', %f)", i, i, float64(i)))
 	}
-	
+
 	_, err = db.Exec(sb.String())
 	if err != nil {
 		b.Fatalf("failed to insert data: %v", err)
 	}
-	
+
 	// Prepare the statement
 	stmt, err := db.Prepare(`SELECT id, name, value FROM benchmark ORDER BY id LIMIT 1000`)
 	if err != nil {
@@ -363,7 +361,7 @@ func BenchmarkQueryRowsPrepared(b *testing.B) {
 		var id int
 		var name string
 		var value float64
-        
+
 		for rows.Next() {
 			if err := rows.Scan(&id, &name, &value); err != nil {
 				rows.Close()
@@ -404,44 +402,44 @@ func BenchmarkQueryRowsStringOnly(b *testing.B) {
 	if err != nil {
 		b.Fatalf("failed to prepare insert statement: %v", err)
 	}
-	
+
 	// Insert 1000 rows with a mix of repeated and unique strings
 	for i := 0; i < 1000; i++ {
 		s1 := "repeated_string1"
 		if i%5 != 0 {
 			s1 = fmt.Sprintf("unique_%d", i)
 		}
-		
+
 		s2 := "repeated_string2"
 		if i%5 != 1 {
 			s2 = fmt.Sprintf("unique_%d", i+1)
 		}
-		
+
 		s3 := "repeated_string3"
 		if i%5 != 2 {
 			s3 = fmt.Sprintf("unique_%d", i+2)
 		}
-		
+
 		s4 := "repeated_string4"
 		if i%5 != 3 {
 			s4 = fmt.Sprintf("unique_%d", i+3)
 		}
-		
+
 		s5 := "repeated_string5"
 		if i%5 != 4 {
 			s5 = fmt.Sprintf("unique_%d", i+4)
 		}
-		
+
 		// Common values for the rest to test caching of identical strings
 		const commonValue = "common_value"
-		
+
 		_, err := stmt.Exec(s1, s2, s3, s4, s5, commonValue, commonValue, commonValue, commonValue, commonValue)
 		if err != nil {
 			b.Fatalf("failed to insert row %d: %v", i, err)
 		}
 	}
 	stmt.Close()
-	
+
 	// Prepare the query statement
 	queryStmt, err := db.Prepare(`SELECT * FROM string_bench LIMIT 1000`)
 	if err != nil {
@@ -453,17 +451,17 @@ func BenchmarkQueryRowsStringOnly(b *testing.B) {
 	b.Run("WithStringOptimization", func(b *testing.B) {
 		b.ResetTimer()
 		b.ReportAllocs() // Report memory allocations
-	
+
 		// Benchmark query with just string values
 		for i := 0; i < b.N; i++ {
 			rows, err := queryStmt.Query()
 			if err != nil {
 				b.Fatalf("failed to query: %v", err)
 			}
-	
+
 			count := 0
 			var s1, s2, s3, s4, s5, s6, s7, s8, s9, s10 string
-	        
+
 			for rows.Next() {
 				if err := rows.Scan(&s1, &s2, &s3, &s4, &s5, &s6, &s7, &s8, &s9, &s10); err != nil {
 					rows.Close()
@@ -472,17 +470,17 @@ func BenchmarkQueryRowsStringOnly(b *testing.B) {
 				count++
 			}
 			rows.Close()
-	
+
 			if err := rows.Err(); err != nil {
 				b.Fatalf("error during row iteration: %v", err)
 			}
-	
+
 			if count != 1000 {
 				b.Fatalf("expected 1000 rows, got %d", count)
 			}
 		}
 	})
-	
+
 	// Now create a benchmark with high-allocation string handling
 	// This simulates naive string handling without our optimizations
 	b.Run("HighAllocationStringHandling", func(b *testing.B) {
@@ -493,29 +491,29 @@ func BenchmarkQueryRowsStringOnly(b *testing.B) {
 			b.Fatalf("failed to prepare duplicate statement: %v", err)
 		}
 		defer dupStmt.Close()
-		
+
 		b.ResetTimer()
 		b.ReportAllocs()
-		
+
 		for i := 0; i < b.N; i++ {
 			rows, err := dupStmt.Query()
 			if err != nil {
 				b.Fatalf("failed to query: %v", err)
 			}
-			
+
 			count := 0
 			var s1, s2, s3, s4, s5, s6, s7, s8, s9, s10 string
-			
+
 			// Each allocation is accumulated in this slice to force memory pressure
 			// This simulates storing strings from the database in memory
 			allStrings := make([]string, 0, 10*1000)
-			
+
 			for rows.Next() {
 				if err := rows.Scan(&s1, &s2, &s3, &s4, &s5, &s6, &s7, &s8, &s9, &s10); err != nil {
 					rows.Close()
 					b.Fatalf("failed to scan: %v", err)
 				}
-				
+
 				// Force new string allocations by concatenating with a unique value
 				// This simulates what would happen with naive string handling
 				s1 = s1 + string(rune(count%128))
@@ -528,18 +526,18 @@ func BenchmarkQueryRowsStringOnly(b *testing.B) {
 				s8 = s8 + string(rune(count%128))
 				s9 = s9 + string(rune(count%128))
 				s10 = s10 + string(rune(count%128))
-				
+
 				// Store strings to prevent garbage collection during benchmark
 				allStrings = append(allStrings, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10)
-				
+
 				count++
 			}
 			rows.Close()
-			
+
 			if count != 1000 {
 				b.Fatalf("expected 1000 rows, got %d", count)
 			}
-			
+
 			// Use allStrings to prevent compiler optimizations
 			if len(allStrings) != 10*1000 {
 				b.Fatalf("unexpected strings length")
@@ -552,13 +550,13 @@ func BenchmarkQueryRowsStringOnly(b *testing.B) {
 	if err != nil {
 		b.Fatalf("failed to create unique strings table: %v", err)
 	}
-	
+
 	// Insert 10,000 rows with all unique strings to test cache behavior with low hit rate
 	uniqueInsertStmt, err := db.Prepare(`INSERT INTO unique_strings VALUES (?, ?)`)
 	if err != nil {
 		b.Fatalf("failed to prepare unique insert statement: %v", err)
 	}
-	
+
 	for i := 0; i < 10000; i++ {
 		uniqueStr := fmt.Sprintf("unique_long_string_that_would_not_normally_be_repeated_%d", i)
 		_, err := uniqueInsertStmt.Exec(i, uniqueStr)
@@ -622,11 +620,11 @@ func BenchmarkQueryRowsBlob(b *testing.B) {
 	smallBlob := []byte("small blob")
 	mediumBlob := make([]byte, 1000)
 	largeBlob := make([]byte, 10000)
-	
+
 	for i := range mediumBlob {
 		mediumBlob[i] = byte(i % 256)
 	}
-	
+
 	for i := range largeBlob {
 		largeBlob[i] = byte(i % 256)
 	}
@@ -636,7 +634,7 @@ func BenchmarkQueryRowsBlob(b *testing.B) {
 	if err != nil {
 		b.Fatalf("failed to prepare statement: %v", err)
 	}
-	
+
 	// Insert 100 rows with different blob sizes
 	for i := 0; i < 100; i++ {
 		var blob []byte
@@ -648,14 +646,14 @@ func BenchmarkQueryRowsBlob(b *testing.B) {
 		case 2:
 			blob = largeBlob
 		}
-		
+
 		_, err = stmt.Exec(i, blob)
 		if err != nil {
 			b.Fatalf("failed to insert BLOB: %v", err)
 		}
 	}
 	stmt.Close()
-	
+
 	b.Run("ZeroCopyBlobOptimized", func(b *testing.B) {
 		// Prepare query statement
 		stmt, err := db.Prepare("SELECT id, data FROM blob_test ORDER BY id LIMIT 100")
@@ -663,48 +661,48 @@ func BenchmarkQueryRowsBlob(b *testing.B) {
 			b.Fatalf("failed to prepare statement: %v", err)
 		}
 		defer stmt.Close()
-	
+
 		// Reset timer for benchmark
 		b.ResetTimer()
 		b.ReportAllocs()
-	
+
 		// Benchmark query with BLOBs using zero-copy optimization
 		for i := 0; i < b.N; i++ {
 			rows, err := stmt.Query()
 			if err != nil {
 				b.Fatalf("failed to query: %v", err)
 			}
-	
+
 			count := 0
 			var id int
 			var data []byte
-			
+
 			for rows.Next() {
 				if err := rows.Scan(&id, &data); err != nil {
 					rows.Close()
 					b.Fatalf("failed to scan row: %v", err)
 				}
-				
+
 				// Verify the data is valid but don't use it extensively
 				// to isolate the scanning performance
 				if len(data) == 0 {
 					b.Fatalf("expected non-empty blob")
 				}
-				
+
 				count++
 			}
 			rows.Close()
-	
+
 			if err := rows.Err(); err != nil {
 				b.Fatalf("error during row iteration: %v", err)
 			}
-	
+
 			if count != 100 {
 				b.Fatalf("expected 100 rows, got %d", count)
 			}
 		}
 	})
-	
+
 	b.Run("HighAllocationBlobProcessing", func(b *testing.B) {
 		// Prepare query statement - create a new one to avoid any caching effects
 		stmt, err := db.Prepare("SELECT id, data FROM blob_test ORDER BY id LIMIT 100")
@@ -712,64 +710,64 @@ func BenchmarkQueryRowsBlob(b *testing.B) {
 			b.Fatalf("failed to prepare statement: %v", err)
 		}
 		defer stmt.Close()
-	
+
 		// Reset timer for benchmark
 		b.ResetTimer()
 		b.ReportAllocs()
-	
+
 		// Benchmark query with high allocation simulated blob processing
 		for i := 0; i < b.N; i++ {
 			rows, err := stmt.Query()
 			if err != nil {
 				b.Fatalf("failed to query: %v", err)
 			}
-	
+
 			count := 0
 			var id int
 			var data []byte
-			
+
 			// Accumulate all blobs to simulate real-world usage where
 			// you'd actually do something with the data
 			allBlobs := make([][]byte, 0, 100)
-			
+
 			for rows.Next() {
 				if err := rows.Scan(&id, &data); err != nil {
 					rows.Close()
 					b.Fatalf("failed to scan row: %v", err)
 				}
-				
+
 				// Create a new copy to simulate processing the blob data
 				// This is the high-allocation path that our optimization targets
 				dataCopy := make([]byte, len(data))
 				copy(dataCopy, data)
-				
+
 				// Do a simple transformation to prevent optimizer from eliding the copy
 				for i := 0; i < len(dataCopy) && i < 4; i++ {
 					dataCopy[i] = byte(i ^ int(dataCopy[i]))
 				}
-				
+
 				// Store the processed blob
 				allBlobs = append(allBlobs, dataCopy)
-				
+
 				count++
 			}
 			rows.Close()
-	
+
 			if err := rows.Err(); err != nil {
 				b.Fatalf("error during row iteration: %v", err)
 			}
-	
+
 			if count != 100 {
 				b.Fatalf("expected 100 rows, got %d", count)
 			}
-			
+
 			// Use the accumulated blobs to prevent compiler optimizations
 			if len(allBlobs) != 100 {
 				b.Fatalf("incorrect blob accumulation")
 			}
 		}
 	})
-	
+
 	// Test with repeated queries to measure the impact of buffer pooling
 	b.Run("RepeatedBlobQueries", func(b *testing.B) {
 		// Prepare query statement
@@ -778,31 +776,31 @@ func BenchmarkQueryRowsBlob(b *testing.B) {
 			b.Fatalf("failed to prepare statement: %v", err)
 		}
 		defer stmt.Close()
-	
+
 		// Reset timer for benchmark
 		b.ResetTimer()
 		b.ReportAllocs()
-	
+
 		// Run many small queries to exercise the buffer pooling
 		for i := 0; i < b.N; i++ {
 			// Query different segments to avoid query result caching
 			startID := i % 90
-			
+
 			rows, err := stmt.Query(startID)
 			if err != nil {
 				b.Fatalf("failed to query: %v", err)
 			}
-	
+
 			var id int
 			var data []byte
 			count := 0
-			
+
 			for rows.Next() {
 				if err := rows.Scan(&id, &data); err != nil {
 					rows.Close()
 					b.Fatalf("failed to scan row: %v", err)
 				}
-				
+
 				// Just verify correct data size based on row pattern
 				expectedSize := 0
 				switch (startID + count) % 3 {
@@ -813,12 +811,12 @@ func BenchmarkQueryRowsBlob(b *testing.B) {
 				case 2:
 					expectedSize = len(largeBlob)
 				}
-				
+
 				if expectedSize > 0 && len(data) != expectedSize {
-					b.Fatalf("unexpected data size for id %d: got %d, expected ~%d", 
+					b.Fatalf("unexpected data size for id %d: got %d, expected ~%d",
 						id, len(data), expectedSize)
 				}
-				
+
 				count++
 			}
 			rows.Close()
@@ -844,19 +842,19 @@ func BenchmarkQueryRowsNoScan(b *testing.B) {
 	rowsCount := 1000 // Reduced to 1000 for quicker setup
 	var sb strings.Builder
 	sb.WriteString("INSERT INTO benchmark VALUES ")
-	
+
 	for i := 0; i < rowsCount; i++ {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
 		sb.WriteString(fmt.Sprintf("(%d, 'name-%d', %f)", i, i, float64(i)))
 	}
-	
+
 	_, err = db.Exec(sb.String())
 	if err != nil {
 		b.Fatalf("failed to insert data: %v", err)
 	}
-	
+
 	// Prepare the statement
 	stmt, err := db.Prepare(`SELECT id, name, value FROM benchmark ORDER BY id LIMIT 1000`)
 	if err != nil {
@@ -875,7 +873,7 @@ func BenchmarkQueryRowsNoScan(b *testing.B) {
 			b.Fatalf("failed to query: %v", err)
 		}
 
-		count := 0        
+		count := 0
 		for rows.Next() {
 			// Just iterate without scanning values
 			count++
@@ -980,7 +978,7 @@ func BenchmarkBufferPooling(b *testing.B) {
 func BenchmarkComplexQuery(b *testing.B) {
 	// Skip this benchmark for now as we're focusing on simpler benchmarks first
 	b.Skip("Skipping complex query benchmark for now")
-	
+
 	db, err := sql.Open("duckdb", ":memory:")
 	if err != nil {
 		b.Fatalf("failed to open database: %v", err)
@@ -1019,7 +1017,7 @@ func BenchmarkComplexQuery(b *testing.B) {
 	orderCount := 1000
 	var sb strings.Builder
 	sb.WriteString("INSERT INTO orders VALUES ")
-	
+
 	now := time.Now()
 	for i := 0; i < orderCount; i++ {
 		if i > 0 {
@@ -1039,7 +1037,7 @@ func BenchmarkComplexQuery(b *testing.B) {
 		sb.WriteString(fmt.Sprintf("(%d, %d, '%s', %f, '%s')",
 			i, customerID, orderDate.Format("2006-01-02 15:04:05"), amount, status))
 	}
-	
+
 	_, err = db.Exec(sb.String())
 	if err != nil {
 		b.Fatalf("failed to insert orders: %v", err)
@@ -1048,11 +1046,11 @@ func BenchmarkComplexQuery(b *testing.B) {
 	// Order items (5 items per order on average)
 	sb.Reset()
 	sb.WriteString("INSERT INTO order_items VALUES ")
-	
+
 	itemID := 0
 	for orderID := 0; orderID < orderCount; orderID++ {
 		itemCount := 3 + (orderID % 5) // 3-7 items per order
-		
+
 		for j := 0; j < itemCount; j++ {
 			if itemID > 0 {
 				sb.WriteString(", ")
@@ -1064,11 +1062,11 @@ func BenchmarkComplexQuery(b *testing.B) {
 
 			sb.WriteString(fmt.Sprintf("(%d, %d, %d, %d, %f)",
 				itemID, orderID, productID, quantity, price))
-			
+
 			itemID++
 		}
 	}
-	
+
 	_, err = db.Exec(sb.String())
 	if err != nil {
 		b.Fatalf("failed to insert order items: %v", err)

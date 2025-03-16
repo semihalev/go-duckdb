@@ -208,17 +208,17 @@ func TestDataTypes(t *testing.T) {
 	// Timestamp comparison - include time components but ignore timezone differences
 	// Convert timestamps to UTC for comparison
 	utcTs := tsVal.UTC()
-	
+
 	// Just check the date parts and time parts separately since timezone handling might differ
 	if utcTs.Year() != 2023 || utcTs.Month() != 5 || utcTs.Day() != 15 {
-		t.Errorf("Expected ts_val date 2023-05-15, got %d-%02d-%02d", 
+		t.Errorf("Expected ts_val date 2023-05-15, got %d-%02d-%02d",
 			utcTs.Year(), utcTs.Month(), utcTs.Day())
 	}
-	
+
 	// The time might be in a different timezone, so just check hour/minute/second are expected values
 	// in some timezone (don't be strict about which timezone)
-	if (utcTs.Hour() != 14 && tsVal.Hour() != 14) || 
-	   utcTs.Minute() != 30 || utcTs.Second() != 45 {
+	if (utcTs.Hour() != 14 && tsVal.Hour() != 14) ||
+		utcTs.Minute() != 30 || utcTs.Second() != 45 {
 		t.Errorf("Expected ts_val time components to be approximately 14:30:45, got %v", tsVal)
 	}
 }
@@ -529,7 +529,7 @@ func TestBooleanHandling(t *testing.T) {
 func TestAppender(t *testing.T) {
 	// Skip this test for now until we fix the appender implementation
 	t.Skip("Skipping appender test until fully implemented")
-	
+
 	db, err := sql.Open("duckdb", ":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
@@ -606,7 +606,7 @@ func TestAppender(t *testing.T) {
 
 		expectedName := fmt.Sprintf("Name-%d", id)
 		if id != count || name != expectedName {
-			t.Errorf("Row %d: Expected (%d, '%s'), got (%d, '%s')", 
+			t.Errorf("Row %d: Expected (%d, '%s'), got (%d, '%s')",
 				count, count, expectedName, id, name)
 		}
 

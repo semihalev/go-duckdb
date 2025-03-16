@@ -29,7 +29,7 @@ func GetDuckDBVersion() string {
 // CheckDuckDBVersion checks if the current DuckDB version is compatible with the required version.
 func CheckDuckDBVersion(required string) bool {
 	current := GetDuckDBVersion()
-	
+
 	// Simple version check - we just look at the prefix
 	return strings.HasPrefix(current, required)
 }
@@ -38,14 +38,14 @@ func CheckDuckDBVersion(required string) bool {
 // This is useful for runtime feature detection.
 func GetDuckDBFeatureFlags() map[string]bool {
 	version := GetDuckDBVersion()
-	
+
 	flags := map[string]bool{
-		"AppenderSupport":    true,                     // All versions support appenders
+		"AppenderSupport":    true,                               // All versions support appenders
 		"PreparedStatements": !strings.HasPrefix(version, "1.2"), // Prepared statements have issues in 1.2.x
 		"NamedParameters":    !strings.HasPrefix(version, "1.2"), // Named parameters have issues in 1.2.x
-		"BlobSupport":        true,                     // All versions support BLOBs
+		"BlobSupport":        true,                               // All versions support BLOBs
 		"TimeZoneSupport":    strings.HasPrefix(version, "1.2"),  // Time zone types added in 1.2.x
 	}
-	
+
 	return flags
 }

@@ -222,11 +222,11 @@ func (c *Connection) QueryContext(ctx context.Context, query string, args []driv
 		// Execute statement with pooled result - pass by address since it's a struct now
 		if err := C.duckdb_execute_prepared(stmt, &wrapper.result); err == C.DuckDBError {
 			C.duckdb_destroy_prepare(&stmt)
-			
+
 			// Get error message before returning wrapper to pool
 			errorMsg := goString(C.duckdb_result_error(&wrapper.result))
 			globalBufferPool.PutResultSetWrapper(wrapper)
-			
+
 			return nil, fmt.Errorf("failed to execute statement: %s", errorMsg)
 		}
 
@@ -242,7 +242,7 @@ func (c *Connection) QueryContext(ctx context.Context, query string, args []driv
 			// Get error message before returning wrapper to pool
 			errorMsg := goString(C.duckdb_result_error(&wrapper.result))
 			globalBufferPool.PutResultSetWrapper(wrapper)
-			
+
 			return nil, fmt.Errorf("failed to execute query: %s", errorMsg)
 		}
 

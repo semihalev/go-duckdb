@@ -21,12 +21,12 @@ import (
 
 // Statement represents a DuckDB prepared statement.
 type Statement struct {
-	conn    *Connection
-	stmt    *C.duckdb_prepared_statement
-	query   string
-	params  int
-	closed  int32
-	mu      sync.Mutex
+	conn   *Connection
+	stmt   *C.duckdb_prepared_statement
+	query  string
+	params int
+	closed int32
+	mu     sync.Mutex
 }
 
 // newStatement creates a new DuckDB prepared statement.
@@ -35,7 +35,7 @@ func newStatement(conn *Connection, query string) (*Statement, error) {
 	defer freeString(cQuery)
 
 	var stmt C.duckdb_prepared_statement
-	
+
 	if err := C.duckdb_prepare(*conn.conn, cQuery, &stmt); err == C.DuckDBError {
 		return nil, fmt.Errorf("failed to prepare statement: %s", goString(C.duckdb_prepare_error(stmt)))
 	}
@@ -89,7 +89,7 @@ func (s *Statement) Exec(args []driver.Value) (driver.Result, error) {
 	// Get named arguments buffer from pool to reduce allocations
 	namedArgs := globalBufferPool.GetNamedArgsBuffer(len(args))
 	defer globalBufferPool.PutNamedArgsBuffer(namedArgs) // Return to pool when done
-	
+
 	// Convert to named values for binding
 	for i, arg := range args {
 		namedArgs[i] = driver.NamedValue{
@@ -131,7 +131,7 @@ func (s *Statement) Query(args []driver.Value) (driver.Rows, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	// Get named arguments buffer from pool to reduce allocations
 	namedArgs := globalBufferPool.GetNamedArgsBuffer(len(args))
 	defer globalBufferPool.PutNamedArgsBuffer(namedArgs) // Return to pool when done
@@ -158,7 +158,7 @@ func (s *Statement) Query(args []driver.Value) (driver.Rows, error) {
 		// Get error message before returning wrapper to pool
 		errorMsg := goString(C.duckdb_result_error(&wrapper.result))
 		globalBufferPool.PutResultSetWrapper(wrapper)
-		
+
 		return nil, fmt.Errorf("failed to execute statement: %s", errorMsg)
 	}
 
