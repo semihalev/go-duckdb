@@ -383,8 +383,9 @@ func BenchmarkQueryRowsPrepared(b *testing.B) {
 
 // BenchmarkQueryRowsStringOnly benchmarks scanning only string values
 func BenchmarkQueryRowsStringOnly(b *testing.B) {
-	// Skip this benchmark as it's causing issues and not critical for core functionality
-	b.Skip("Skipping string optimization benchmark due to instability")
+	// This benchmark has SQL compatibility issues or CGO-related issues requiring deeper troubleshooting
+	// Since this is a complex benchmark that's not critical for functionality, we'll skip it for now
+	b.Skip("Skipping string optimization benchmark due to CGO issues requiring investigation")
 	db, err := sql.Open("duckdb", ":memory:")
 	if err != nil {
 		b.Fatalf("failed to open database: %v", err)
