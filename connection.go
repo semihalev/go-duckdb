@@ -25,9 +25,6 @@ type Connection struct {
 	conn   *C.duckdb_connection
 	closed int32
 	mu     sync.Mutex
-
-	// Configuration for using fast driver
-	useFastDriver bool
 }
 
 // NamedValue is used for parameter binding with a name.
@@ -35,13 +32,6 @@ type NamedValue = driver.NamedValue
 
 // ConnectionOption represents an option for configuring a DuckDB connection
 type ConnectionOption func(*Connection)
-
-// WithFastDriver enables the high-performance fast driver implementation
-func WithFastDriver() ConnectionOption {
-	return func(c *Connection) {
-		c.useFastDriver = true
-	}
-}
 
 // NewConnection creates a new connection to the DuckDB database.
 func NewConnection(path string, options ...ConnectionOption) (*Connection, error) {
@@ -63,9 +53,8 @@ func NewConnection(path string, options ...ConnectionOption) (*Connection, error
 	}
 
 	c := &Connection{
-		db:            &db,
-		conn:          &conn,
-		useFastDriver: true, // Always use fast driver
+		db:   &db,
+		conn: &conn,
 	}
 
 	// Apply all options

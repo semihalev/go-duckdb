@@ -1,4 +1,3 @@
-
 // Package duckdb provides a zero-allocation, high-performance SQL driver for DuckDB in Go.
 package duckdb
 
@@ -177,13 +176,13 @@ func (stmt *FastStmt) Close() error {
 		C.duckdb_destroy_prepare(stmt.stmt)
 		stmt.stmt = nil
 	}
-	
+
 	// Close standard statement if it exists (for stub implementation)
 	if stmt.standardStmt != nil {
 		stmt.standardStmt.Close()
 		stmt.standardStmt = nil
 	}
-	
+
 	return nil
 }
 
@@ -194,7 +193,7 @@ func (stmt *FastStmt) Exec(args []driver.Value) (driver.Result, error) {
 	for i, arg := range args {
 		params[i] = arg
 	}
-	
+
 	return stmt.ExecuteWithResult(params...)
 }
 
@@ -205,7 +204,7 @@ func (stmt *FastStmt) Query(args []driver.Value) (driver.Rows, error) {
 	for i, arg := range args {
 		params[i] = arg
 	}
-	
+
 	return stmt.ExecuteFast(params...)
 }
 
@@ -477,7 +476,7 @@ func (r *FastRows) Next(dest []driver.Value) error {
 		// Get column metadata
 		colPtr := unsafe.Pointer(uintptr(unsafe.Pointer(r.buffer.columns)) + uintptr(i)*unsafe.Sizeof(C.column_meta_t{}))
 		colInfo := (*C.column_meta_t)(colPtr)
-		
+
 		// Get nulls pointer for this column
 		nullsPtrPtr := (*unsafe.Pointer)(unsafe.Pointer(uintptr(unsafe.Pointer(r.buffer.nulls_ptrs)) + uintptr(i)*unsafe.Sizeof(unsafe.Pointer(nil))))
 		if *nullsPtrPtr == nil {
@@ -485,85 +484,85 @@ func (r *FastRows) Next(dest []driver.Value) error {
 			continue
 		}
 		nullsArray := (*[1 << 30]C.int8_t)(unsafe.Pointer(*nullsPtrPtr))
-		
+
 		// Check if value is NULL
 		if nullsArray[r.currentRow] != 0 {
 			dest[i] = nil
 			continue
 		}
-		
+
 		// Get data pointer for this column
 		dataPtr := (*unsafe.Pointer)(unsafe.Pointer(uintptr(unsafe.Pointer(r.buffer.data_ptrs)) + uintptr(i)*unsafe.Sizeof(unsafe.Pointer(nil))))
-		
+
 		// Extract value based on column type
 		switch colInfo._type {
 		case C.DUCKDB_TYPE_BOOLEAN:
 			// Boolean values are stored as int8_t (0 or 1)
 			boolArray := (*[1 << 30]C.int8_t)(unsafe.Pointer(*dataPtr))
 			dest[i] = boolArray[r.currentRow] != 0
-			
+
 		case C.DUCKDB_TYPE_TINYINT:
 			int8Array := (*[1 << 30]C.int8_t)(unsafe.Pointer(*dataPtr))
 			dest[i] = int8(int8Array[r.currentRow])
-			
+
 		case C.DUCKDB_TYPE_SMALLINT:
 			int16Array := (*[1 << 30]C.int16_t)(unsafe.Pointer(*dataPtr))
 			dest[i] = int16(int16Array[r.currentRow])
-			
+
 		case C.DUCKDB_TYPE_INTEGER:
 			int32Array := (*[1 << 30]C.int32_t)(unsafe.Pointer(*dataPtr))
 			dest[i] = int32(int32Array[r.currentRow])
-			
+
 		case C.DUCKDB_TYPE_BIGINT:
 			int64Array := (*[1 << 30]C.int64_t)(unsafe.Pointer(*dataPtr))
 			dest[i] = int64(int64Array[r.currentRow])
-			
+
 		case C.DUCKDB_TYPE_FLOAT:
 			floatArray := (*[1 << 30]C.float)(unsafe.Pointer(*dataPtr))
 			dest[i] = float32(floatArray[r.currentRow])
-			
+
 		case C.DUCKDB_TYPE_DOUBLE:
 			doubleArray := (*[1 << 30]C.double)(unsafe.Pointer(*dataPtr))
 			dest[i] = float64(doubleArray[r.currentRow])
-			
+
 		case C.DUCKDB_TYPE_VARCHAR:
 			// For strings, we have an array of offsets into the string buffer
 			offsetArray := (*[1 << 30]C.int64_t)(unsafe.Pointer(*dataPtr))
 			offset := offsetArray[r.currentRow]
-			
+
 			// Check for NULL (offset -1)
 			if offset == -1 {
 				dest[i] = nil
 				continue
 			}
-			
+
 			// Get string from buffer at offset
 			strPtr := (*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(r.buffer.string_buffer)) + uintptr(offset)))
 			dest[i] = C.GoString(strPtr)
-		
+
 		case C.DUCKDB_TYPE_DATE:
 			// Check if we have enhanced date data
 			if r.buffer.temporal_data != nil && r.buffer.temporal_data.has_date_data != 0 {
 				// Get date data pointer (seconds since epoch)
 				int64Array := (*[1 << 30]C.int64_t)(unsafe.Pointer(r.buffer.temporal_data.date_data))
 				unix_seconds := int64(int64Array[r.currentRow])
-				
+
 				// Convert Unix time to Go time.Time (UTC)
 				dest[i] = time.Unix(unix_seconds, 0).UTC()
 			} else {
 				// Fallback to string method
 				offsetArray := (*[1 << 30]C.int64_t)(unsafe.Pointer(*dataPtr))
 				offset := offsetArray[r.currentRow]
-				
+
 				if offset == -1 {
 					dest[i] = nil
 					continue
 				}
-				
+
 				// Get string from buffer at offset
 				strPtr := (*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(r.buffer.string_buffer)) + uintptr(offset)))
 				dateStr := C.GoString(strPtr)
-				
+
 				// Parse date and convert to time.Time
 				// Use standard date parsing logic: days since 1970-01-01
 				if t, err := time.Parse("2006-01-02", dateStr); err == nil {
@@ -575,37 +574,37 @@ func (r *FastRows) Next(dest []driver.Value) error {
 					dest[i] = dateStr
 				}
 			}
-		
+
 		case C.DUCKDB_TYPE_TIMESTAMP, C.DUCKDB_TYPE_TIMESTAMP_S, C.DUCKDB_TYPE_TIMESTAMP_MS, C.DUCKDB_TYPE_TIMESTAMP_NS:
 			// Check if we have enhanced timestamp data
 			if r.buffer.temporal_data != nil && r.buffer.temporal_data.has_timestamp_data != 0 {
 				// Get timestamp data pointers
 				secondsArray := (*[1 << 30]C.int64_t)(unsafe.Pointer(r.buffer.temporal_data.timestamp_seconds))
 				nanosArray := (*[1 << 30]C.int32_t)(unsafe.Pointer(r.buffer.temporal_data.timestamp_nanos))
-				
+
 				// Convert to Go time.Time
 				unix_seconds := int64(secondsArray[r.currentRow])
 				nanos := int64(nanosArray[r.currentRow])
-				
+
 				dest[i] = time.Unix(unix_seconds, nanos).UTC()
 			} else {
 				// Fallback to string method
 				offsetArray := (*[1 << 30]C.int64_t)(unsafe.Pointer(*dataPtr))
 				offset := offsetArray[r.currentRow]
-				
+
 				if offset == -1 {
 					dest[i] = nil
 					continue
 				}
-				
+
 				// Get string from buffer at offset
 				strPtr := (*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(r.buffer.string_buffer)) + uintptr(offset)))
 				timeStr := C.GoString(strPtr)
-				
+
 				// Parse timestamp string to time.Time
 				var t time.Time
 				var err error
-				
+
 				// Try different timestamp formats
 				for _, layout := range []string{
 					"2006-01-02 15:04:05.999999",
@@ -619,31 +618,31 @@ func (r *FastRows) Next(dest []driver.Value) error {
 						break
 					}
 				}
-				
+
 				// If all parsing attempts failed, fall back to string
 				if err != nil {
 					dest[i] = timeStr
 				}
 			}
-			
+
 		default:
 			// For other types, convert to string
 			// This is not optimal but handles all remaining types for now
 			offsetArray := (*[1 << 30]C.int64_t)(unsafe.Pointer(*dataPtr))
 			offset := offsetArray[r.currentRow]
-			
+
 			// Check for NULL (offset -1)
 			if offset == -1 {
 				dest[i] = nil
 				continue
 			}
-			
+
 			// Get string from buffer at offset
 			strPtr := (*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(r.buffer.string_buffer)) + uintptr(offset)))
 			dest[i] = C.GoString(strPtr)
 		}
 	}
-	
+
 	r.currentRow++
 	return nil
 }
@@ -653,7 +652,7 @@ func (r *FastRows) Next(dest []driver.Value) error {
 func (conn *Connection) DirectQuery(query string, args ...interface{}) ([][]interface{}, []string, error) {
 	var rows driver.Rows
 	var err error
-	
+
 	// Execute query based on whether we have parameters
 	if len(args) == 0 {
 		rows, err = conn.FastQuery(query)
@@ -664,21 +663,21 @@ func (conn *Connection) DirectQuery(query string, args ...interface{}) ([][]inte
 			return nil, nil, err
 		}
 		defer stmt.Close()
-		
+
 		rows, err = stmt.ExecuteFast(args...)
 	}
-	
+
 	if err != nil {
 		return nil, nil, err
 	}
 	defer rows.Close()
-	
+
 	// Get column names
 	columns := rows.Columns()
-	
+
 	// Prepare result set
 	var result [][]interface{}
-	
+
 	// Iterate through rows
 	for {
 		values := make([]driver.Value, len(columns))
@@ -686,16 +685,16 @@ func (conn *Connection) DirectQuery(query string, args ...interface{}) ([][]inte
 		if err != nil {
 			break
 		}
-		
+
 		// Convert to interface{} for return
 		row := make([]interface{}, len(values))
 		for i, v := range values {
 			row[i] = v
 		}
-		
+
 		result = append(result, row)
 	}
-	
+
 	return result, columns, nil
 }
 
@@ -727,13 +726,13 @@ func (w *FastStmtWrapper) Exec(args []driver.Value) (driver.Result, error) {
 	if w.stmt == nil {
 		return nil, fmt.Errorf("statement is closed")
 	}
-	
+
 	// Convert to []interface{}
 	params := make([]interface{}, len(args))
 	for i, arg := range args {
 		params[i] = arg
 	}
-	
+
 	return w.stmt.ExecuteWithResult(params...)
 }
 
@@ -742,12 +741,12 @@ func (w *FastStmtWrapper) Query(args []driver.Value) (driver.Rows, error) {
 	if w.stmt == nil {
 		return nil, fmt.Errorf("statement is closed")
 	}
-	
+
 	// Convert to []interface{}
 	params := make([]interface{}, len(args))
 	for i, arg := range args {
 		params[i] = arg
 	}
-	
+
 	return w.stmt.ExecuteFast(params...)
 }

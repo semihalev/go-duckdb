@@ -1218,10 +1218,5 @@ func (d *Driver) Open(name string) (driver.Conn, error) {
 
 	var options []ConnectionOption
 
-	// Set the fast driver option if enabled
-	if d.useFastDriver {
-		options = append(options, WithFastDriver())
-	}
-
 	return NewConnection(name, options...)
 }
