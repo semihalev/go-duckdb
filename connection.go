@@ -156,9 +156,9 @@ func (c *Connection) ExecContext(ctx context.Context, query string, args []drive
 		defer C.duckdb_destroy_prepare(&stmt)
 
 		// Bind parameters
-		//if err := bindParameters(&stmt, args); err != nil {
-		//	return nil, err
-		//}
+		if err := bindParameters(&stmt, args); err != nil {
+			return nil, err
+		}
 
 		// Execute statement
 		var result C.duckdb_result
