@@ -42,7 +42,8 @@ Create the fastest, most reliable, zero-allocation DuckDB driver for Go, leverag
 - [x] Implement `driver.QueryerContext` and `driver.ExecerContext` for direct context support
 - [x] Initial implementation of appender API for fast data loading
 - [ ] Complete parameter binding optimizations
-- [ ] Fix boolean type handling in parameters and results
+- [x] Fix boolean type handling in parameters and results
+- [x] Add rows affected tracking for DML operations 
 - [ ] Implement `driver.NamedValueChecker` for better parameter binding
 - [ ] Add connection configuration options (timeouts, cache settings)
 - [ ] Add better error handling and detailed error messages
@@ -50,8 +51,16 @@ Create the fastest, most reliable, zero-allocation DuckDB driver for Go, leverag
 
 ### Phase 2: Advanced Features
 
-- [ ] Implement batched operations via `driver.Batch` interface
-- [ ] Add support for DuckDB-specific data types
+- [x] Implement batched operations via `BatchQuery`
+- [x] Add support for core DuckDB data types
+  - [x] Improve date/timestamp type handling
+  - [x] Add special handling for temporal data
+  - [x] Optimize numeric type conversions
+- [ ] Support for advanced DuckDB-specific data types
+  - [ ] STRUCT support
+  - [ ] MAP type support
+  - [ ] LIST/ARRAY handling
+  - [ ] ENUM type handling
 - [ ] Support for DuckDB extensions and custom functions
 - [ ] Add session management capabilities
 - [ ] Implement connection pooling optimizations
@@ -75,6 +84,12 @@ Create the fastest, most reliable, zero-allocation DuckDB driver for Go, leverag
   - [x] Add zero-copy string handling with shared intern maps
   - [x] Add zero-copy BLOB handling with buffer pooling
   - [x] Add multi-level buffer pooling for concurrent access
+- [x] Implement advanced memory management
+  - [x] Add reference counting for result buffers
+  - [x] Create proper buffer ownership transfer mechanism
+  - [x] Add automatic cleanup with finalizers
+  - [x] Improve buffer reuse with tiered pool system
+  - [x] Add buffer pool statistics and monitoring
 - [ ] Implement streaming for large datasets
 - [ ] Create specialized memory pooling for large operations
 - [ ] Add SIMD optimizations for common operations
