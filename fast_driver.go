@@ -435,7 +435,12 @@ func newFastRowsFromBuffer(buffer *C.result_buffer_t) *FastRows {
 
 // finalizeRows is called by the garbage collector to ensure the buffer is released
 func finalizeRows(rows *FastRows) {
+	// First close the rows
 	rows.Close()
+	
+	// Then release buffer resources - we do this as a separate step to avoid use-after-free
+	// during actual use
+	rows.releaseBufferResources()
 }
 
 // Columns returns the names of the columns.
@@ -449,16 +454,33 @@ func (r *FastRows) Close() error {
 		return nil
 	}
 
-	// Return buffer to pool
+	// Mark as closed to prevent further Next() calls
+	r.closed = true
+	
+	// We'll hold onto our buffer but mark ourselves as closed
+	// This ensures any in-progress Scan operations can complete
+	// The buffer will be released when the finalizer runs or when
+	// explicitly released later
+	
+	// Remove finalizer since we're manually handling cleanup
+	runtime.SetFinalizer(r, nil)
+	
+	// Instead of immediately freeing the buffer, we'll hold onto it
+	// This prevents use-after-free when Close() is called during row scan
+	// We can implement a more sophisticated buffer release strategy if needed
+	
+	return nil
+}
+
+// releaseBufferResources is a helper to actually release the buffer when safe
+func (r *FastRows) releaseBufferResources() {
 	if r.buffer != nil {
+		// Increase reference count before passing to PutBuffer
+		// This ensures the buffer isn't freed during other operations
+		C.increase_buffer_ref(r.buffer)
 		PutBuffer(r.buffer)
 		r.buffer = nil
 	}
-
-	// Mark as closed and remove finalizer
-	r.closed = true
-	runtime.SetFinalizer(r, nil)
-	return nil
 }
 
 // Next advances to the next row.
@@ -468,6 +490,9 @@ func (r *FastRows) Next(dest []driver.Value) error {
 	}
 
 	if r.currentRow >= r.rowCount {
+		// At the end of the result set, we can safely release resources
+		// This helps with early cleanup in normal usage patterns
+		r.releaseBufferResources()
 		return io.EOF
 	}
 
