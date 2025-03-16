@@ -17,6 +17,7 @@ type StringCacher interface {
 	Get(colIdx int, value string) string
 	GetFromBytes(colIdx int, bytes []byte) string
 	GetFromCString(colIdx int, cstr *C.char, length C.size_t) string
+	GetDedupString(value string) string
 	Reset()
 	TuneCache()
 }
@@ -380,4 +381,64 @@ func (sc *OptimizedStringCache) TuneCache() {
 	// Reset stats for next tuning cycle
 	sc.hits = 0
 	sc.misses = 0
+}
+
+// GetDedupString returns a deduplicated string from the cache
+// It uses the shared string map for maximum deduplication across all strings
+func (sc *OptimizedStringCache) GetDedupString(value string) string {
+	// Simple length check to avoid map lookups for empty strings
+	if value == "" {
+		return ""
+	}
+
+	// Small string optimization - for very common short strings
+	if len(value) < sc.smallStringThreshold {
+		// Check the local map first - this is the hottest path
+		if cached, ok := sc.smallStrings[value]; ok {
+			sc.hits++
+			return cached
+		}
+
+		// For very small strings, use the shared pool for massive deduplication
+		if sc.useSharedStringMap {
+			result := globalBufferPool.GetSharedString(value)
+
+			// Cache locally too for future hits
+			sc.smallStrings[value] = result
+
+			sc.misses++
+			return result
+		}
+
+		// For non-shared mode, store in local map
+		sc.smallStrings[value] = value
+		sc.misses++
+		return value
+	}
+
+	// Medium string optimization - use thread-safe map
+	if len(value) < sc.mediumStringThreshold {
+		// Check medium string cache
+		if cached, ok := sc.mediumStrings.Load(value); ok {
+			sc.hits++
+			return cached.(string)
+		}
+
+		// Only use shared map for medium strings
+		if sc.useSharedStringMap {
+			result := globalBufferPool.GetSharedString(value)
+			sc.mediumStrings.Store(value, result)
+			sc.misses++
+			return result
+		}
+
+		// Store in medium string cache
+		sc.mediumStrings.Store(value, value)
+		sc.misses++
+		return value
+	}
+
+	// For large strings, no caching to avoid memory bloat
+	sc.misses++
+	return value
 }

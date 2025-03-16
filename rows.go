@@ -732,6 +732,38 @@ func (sc *StringCache) Stats() (hits, misses int) {
 	return sc.hits, sc.misses
 }
 
+// GetDedupString returns a deduplicated string from the cache
+// It uses the shared string map for maximum deduplication across all strings
+func (sc *StringCache) GetDedupString(value string) string {
+	// Simple length check to avoid map lookups for empty strings
+	if value == "" {
+		return ""
+	}
+
+	// First try to get from our local cache
+	if cached, ok := sc.internMap[value]; ok {
+		sc.hits++
+		return cached
+	}
+
+	var finalString string
+
+	// If shared string map is enabled, try to get or add to the global map
+	if sc.useSharedStringMap && len(value) < 1024 {
+		finalString = globalBufferPool.GetSharedString(value)
+	} else {
+		// Otherwise use our local map only
+		finalString = value
+		// Only intern strings under reasonable size to prevent memory bloat
+		if len(value) < 1024 {
+			sc.internMap[value] = value
+		}
+	}
+
+	sc.misses++
+	return finalString
+}
+
 // Next moves to the next row with optimized memory handling.
 func (r *Rows) Next(dest []driver.Value) error {
 	if atomic.LoadInt32(&r.closed) != 0 {
