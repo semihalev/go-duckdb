@@ -10,16 +10,11 @@ import (
 // TestMemoryManagement verifies that our memory management works correctly
 // by performing many query operations and ensuring resources are cleaned up properly
 func TestMemoryManagement(t *testing.T) {
-	// Skip test temporarily as it may be unstable after sync.Pool optimization changes
-	t.Skip("Skipping memory management test as it may be unstable after sync.Pool optimization changes")
-	// Open a database connection
-	driver := &Driver{useFastDriver: true}
-	db, err := driver.Open(":memory:")
+	// Open a database connection directly to test the fast driver path
+	conn, err := NewConnection(":memory:")
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
-
-	conn := db.(*Connection)
 	defer conn.Close()
 
 	// Create a test table

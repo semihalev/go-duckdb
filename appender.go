@@ -45,20 +45,8 @@ func NewAppender(conn *Connection, schema, table string) (*Appender, error) {
 		return nil, fmt.Errorf("failed to create appender: %s", goString(C.duckdb_appender_error(appender)))
 	}
 
-	// Get column count by executing a query
-	var result C.duckdb_result
-	query := fmt.Sprintf("SELECT * FROM %s.%s LIMIT 0", schema, table)
-	cQuery := cString(query)
-	defer freeString(cQuery)
-
-	if err := C.duckdb_query(*conn.conn, cQuery, &result); err == C.DuckDBError {
-		C.duckdb_appender_destroy(&appender)
-		return nil, fmt.Errorf("failed to query table: %s", goString(C.duckdb_result_error(&result)))
-	}
-	defer C.duckdb_destroy_result(&result)
-
-	// Get column count
-	columnCount := int(C.duckdb_column_count(&result))
+	// Get column count directly from the appender
+	columnCount := int(C.duckdb_appender_column_count(appender))
 
 	a := &Appender{
 		conn:        conn,
