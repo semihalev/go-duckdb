@@ -22,7 +22,7 @@ func TestBatchQuery(t *testing.T) {
 	}
 	defer dconn.Close()
 
-	// Create a test table
+	// Create a simple table
 	_, err = dconn.Exec("CREATE TABLE batch_test (id INTEGER, name VARCHAR, value DOUBLE, flag BOOLEAN)", nil)
 	if err != nil {
 		t.Fatalf("Failed to create table: %v", err)
@@ -437,4 +437,123 @@ func BenchmarkBatchQuery(b *testing.B) {
 			rows.Close()
 		}
 	})
+
+	// Test the BatchExec functionality - now enabled after memory management fixes
+	b.Run("BatchExec", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		// Create batches of parameters
+		batchSize := 100
+
+		for i := 0; i < b.N; i++ {
+			// Create multiple parameter sets
+			parameterSets := make([][]interface{}, batchSize)
+
+			// Populate parameter sets
+			for j := 0; j < batchSize; j++ {
+				paramID := (i * batchSize) + j
+				parameterSets[j] = []interface{}{
+					paramID,
+					fmt.Sprintf("batch-%d", paramID),
+					float64(paramID) * 2.5,
+					paramID%3 == 0,
+				}
+			}
+
+			// Execute with BatchExec
+			result, err := conn.BatchExec("INSERT INTO bench_test VALUES (?, ?, ?, ?)", parameterSets)
+			if err != nil {
+				b.Fatalf("Failed to execute batch: %v", err)
+			}
+
+			// Check that rows were affected
+			affected, err := result.RowsAffected()
+			if err != nil {
+				b.Fatalf("Failed to get rows affected: %v", err)
+			}
+
+			if affected != int64(batchSize) {
+				b.Fatalf("Expected %d rows affected, got %d", batchSize, affected)
+			}
+		}
+	})
+}
+
+// TestBatchExec specifically tests the BatchExec functionality
+func TestBatchExec(t *testing.T) {
+	// Memory management issues have been fixed, so we can run this test now
+
+	// Skip if short test mode
+	if testing.Short() {
+		t.Skip("Skipping BatchExec test in short mode")
+	}
+
+	// Get direct connection
+	conn, err := NewConnection(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to create connection: %v", err)
+	}
+	defer conn.Close()
+
+	// Create a test table
+	_, err = conn.Exec("CREATE TABLE batch_exec_test (id INTEGER, name VARCHAR)", nil)
+	if err != nil {
+		t.Fatalf("Failed to create table: %v", err)
+	}
+
+	// Create multiple parameter sets for the batch operation
+	batchSize := 10
+	parameterSets := make([][]interface{}, batchSize)
+
+	// Populate parameter sets with minimal types
+	for i := 0; i < batchSize; i++ {
+		parameterSets[i] = []interface{}{
+			i,
+			fmt.Sprintf("name-%d", i),
+		}
+	}
+
+	// Execute with BatchExec
+	result, err := conn.BatchExec("INSERT INTO batch_exec_test VALUES (?, ?)", parameterSets)
+	if err != nil {
+		t.Fatalf("Failed to execute batch: %v", err)
+	}
+
+	// Check that rows were affected
+	affected, err := result.RowsAffected()
+	if err != nil {
+		t.Fatalf("Failed to get rows affected: %v", err)
+	}
+
+	if affected != int64(batchSize) {
+		t.Fatalf("Expected %d rows affected, got %d", batchSize, affected)
+	}
+
+	// Verify data was properly inserted
+	rows, err := conn.Query("SELECT COUNT(*) FROM batch_exec_test", nil)
+	if err != nil {
+		t.Fatalf("Failed to query count: %v", err)
+	}
+
+	values := make([]driver.Value, 1)
+	err = rows.Next(values)
+	if err != nil {
+		t.Fatalf("Failed to fetch count: %v", err)
+	}
+	rows.Close()
+
+	// Handle different possible integer types
+	var count int
+	switch v := values[0].(type) {
+	case int32:
+		count = int(v)
+	case int64:
+		count = int(v)
+	default:
+		t.Fatalf("Unexpected count type: %T", values[0])
+	}
+	if count != batchSize {
+		t.Fatalf("Expected %d rows in table, got %d", batchSize, count)
+	}
 }

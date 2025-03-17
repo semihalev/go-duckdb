@@ -50,7 +50,7 @@ const (
 func init() {
 	// Register the standard driver
 	sql.Register("duckdb", &Driver{})
-	
+
 	// Initialize the other pools to use pointers
 	globalBufferPool.columnNamesPool = sync.Pool{
 		New: func() interface{} {
@@ -58,14 +58,14 @@ func init() {
 			return &buf
 		},
 	}
-	
+
 	globalBufferPool.columnTypesPool = sync.Pool{
 		New: func() interface{} {
 			buf := make([]C.duckdb_type, 0, 32) // Common column count
 			return &buf
 		},
 	}
-	
+
 	globalBufferPool.namedArgsPool = sync.Pool{
 		New: func() interface{} {
 			buf := make([]driver.NamedValue, 0, 16) // Common parameter count
@@ -220,7 +220,7 @@ func (p *ResultBufferPool) PutColumnNamesBuffer(buf []string) {
 	if buf != nil && cap(buf) > 0 {
 		// Create a pointer to the slice to avoid allocations
 		pBuf := &buf
-		*pBuf = (*pBuf)[:0] // Clear slice but keep capacity
+		*pBuf = (*pBuf)[:0]         // Clear slice but keep capacity
 		p.columnNamesPool.Put(pBuf) // Store the pointer
 	}
 }
@@ -244,7 +244,7 @@ func (p *ResultBufferPool) PutColumnTypesBuffer(buf []C.duckdb_type) {
 	if buf != nil && cap(buf) > 0 {
 		// Create a pointer to the slice to avoid allocations
 		pBuf := &buf
-		*pBuf = (*pBuf)[:0] // Clear slice but keep capacity
+		*pBuf = (*pBuf)[:0]         // Clear slice but keep capacity
 		p.columnTypesPool.Put(pBuf) // Store the pointer
 	}
 }
@@ -268,7 +268,7 @@ func (p *ResultBufferPool) PutNamedArgsBuffer(buf []driver.NamedValue) {
 	if buf != nil && cap(buf) > 0 {
 		// Create a pointer to the slice to avoid allocations
 		pBuf := &buf
-		*pBuf = (*pBuf)[:0] // Clear slice but keep capacity
+		*pBuf = (*pBuf)[:0]       // Clear slice but keep capacity
 		p.namedArgsPool.Put(pBuf) // Store the pointer
 	}
 }
@@ -583,13 +583,13 @@ var globalBufferPool = &ResultBufferPool{
 
 	// Initialize tiered pools for string handling with pointer types
 	smallStringPool: sync.Pool{
-		New: func() interface{} { 
+		New: func() interface{} {
 			buf := make([]byte, 0, 128)
 			return &buf
 		},
 	},
 	mediumStringPool: sync.Pool{
-		New: func() interface{} { 
+		New: func() interface{} {
 			buf := make([]byte, 0, 2*1024)
 			return &buf
 		},
@@ -597,19 +597,19 @@ var globalBufferPool = &ResultBufferPool{
 
 	// Initialize tiered pools for blob handling with pointer types
 	smallBlobPool: sync.Pool{
-		New: func() interface{} { 
+		New: func() interface{} {
 			buf := make([]byte, 0, 256)
 			return &buf
 		},
 	},
 	mediumBlobPool: sync.Pool{
-		New: func() interface{} { 
+		New: func() interface{} {
 			buf := make([]byte, 0, 4*1024)
 			return &buf
 		},
 	},
 	largeBlobPool: sync.Pool{
-		New: func() interface{} { 
+		New: func() interface{} {
 			buf := make([]byte, 0, 64*1024)
 			return &buf
 		},

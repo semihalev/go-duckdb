@@ -689,7 +689,7 @@ func (bs *BatchStmt) bindBatchParameters(args []interface{}) error {
 			return fmt.Errorf("unsupported parameter type %T at index %d", v, i)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -736,7 +736,7 @@ func (bs *BatchStmt) QueryContext(ctx context.Context, args []driver.NamedValue)
 	}
 
 	// TODO: Respect context cancellation in the future
-	
+
 	// Bind parameters
 	if err := bs.bindBatchParameters(params); err != nil {
 		return nil, err

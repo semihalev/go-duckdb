@@ -60,6 +60,43 @@ typedef struct {
     int ref_count;
 } result_buffer_t;
 
+// Parameter batch data structure for efficient batch binding
+typedef struct {
+    int32_t param_count;     // Number of parameters
+    int32_t batch_size;      // Number of parameter sets in the batch
+    
+    // Flag arrays for NULL values (param_count * batch_size)
+    int8_t* null_flags;
+    
+    // Parameter type information
+    int32_t* param_types;    // Array of parameter types
+    
+    // Data arrays for each type (pointers to param data for each type)
+    int8_t* bool_data;       // For BOOLEAN
+    int8_t* int8_data;       // For TINYINT
+    int16_t* int16_data;     // For SMALLINT
+    int32_t* int32_data;     // For INTEGER
+    int64_t* int64_data;     // For BIGINT
+    uint8_t* uint8_data;     // For UTINYINT
+    uint16_t* uint16_data;   // For USMALLINT
+    uint32_t* uint32_data;   // For UINTEGER
+    uint64_t* uint64_data;   // For UBIGINT
+    float* float_data;       // For FLOAT
+    double* double_data;     // For DOUBLE
+    
+    // Variable-length data (string and blob)
+    char** string_data;      // Array of string pointers
+    void** blob_data;        // Array of blob data pointers
+    int64_t* blob_lengths;   // Array of blob lengths
+    
+    // Timestamp data
+    int64_t* timestamp_data; // For TIMESTAMP (microseconds)
+    
+    // Resources for cleanup
+    void** resources;        // Pointers to allocated resources
+    int32_t resource_count;  // Count of resources
+} param_batch_t;
+
 // Execute a query and store the entire result set in a single operation
 int execute_query_vectorized(duckdb_connection connection, const char* query, result_buffer_t* buffer);
 
@@ -67,6 +104,18 @@ int execute_query_vectorized(duckdb_connection connection, const char* query, re
 // Parameters are bound directly to the statement before calling this function
 int execute_prepared_vectorized(duckdb_prepared_statement statement, 
                                result_buffer_t* buffer);
+
+// Batch bind parameters to a prepared statement and execute it
+// This reduces the number of CGO crossings for multiple parameter sets
+int bind_and_execute_batch(duckdb_prepared_statement statement, 
+                          param_batch_t* params,
+                          result_buffer_t* buffer);
+
+// Initialize a parameter batch structure
+param_batch_t* create_param_batch(int32_t param_count, int32_t batch_size);
+
+// Free all resources associated with a parameter batch
+void free_param_batch(param_batch_t* params);
 
 // Clean up all resources associated with a result buffer
 void free_result_buffer(result_buffer_t* buffer);

@@ -6,12 +6,43 @@ package duckdb
 #include <stdlib.h>
 #include <string.h>
 #include <duckdb.h>
+#include "include/duckdb_native.h"
+
+// Wrapper functions for our optimized native code
+// These call the native implementation through the C API
+
+static inline void extractInt32Column(duckdb_result *result, idx_t col_idx, int32_t *out_buffer, bool *null_mask) {
+    // Call the native optimized implementation
+    extract_int32_column(result, col_idx, out_buffer, null_mask, 0, duckdb_row_count(result));
+}
+
+static inline void extractInt64Column(duckdb_result *result, idx_t col_idx, int64_t *out_buffer, bool *null_mask) {
+    // Call the native optimized implementation
+    extract_int64_column(result, col_idx, out_buffer, null_mask, 0, duckdb_row_count(result));
+}
+
+static inline void extractFloat64Column(duckdb_result *result, idx_t col_idx, double *out_buffer, bool *null_mask) {
+    // Call the native optimized implementation
+    extract_float64_column(result, col_idx, out_buffer, null_mask, 0, duckdb_row_count(result));
+}
+
+static inline void extractTimestampColumn(duckdb_result *result, idx_t col_idx, int64_t *out_buffer, bool *null_mask) {
+    // Call the native optimized implementation
+    extract_timestamp_column(result, col_idx, out_buffer, null_mask, 0, duckdb_row_count(result));
+}
+
+static inline void extractDateColumn(duckdb_result *result, idx_t col_idx, int32_t *out_buffer, bool *null_mask) {
+    // Call the native optimized implementation
+    extract_date_column(result, col_idx, out_buffer, null_mask, 0, duckdb_row_count(result));
+}
 */
 import "C"
 
 import (
 	"database/sql/driver"
+	"fmt"
 	"io"
+	"reflect"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -258,11 +289,11 @@ func (r *Rows) Next(dest []driver.Value) error {
 			continue
 		}
 
-		// Extract value based on column type with zero-allocation optimizations
+		// Extract value based on column type with native optimizations
 		colType := r.columnTypes[i]
 		switch colType {
 		case C.DUCKDB_TYPE_BOOLEAN:
-			// Fixed boolean handling - correct conversion from DuckDB bool to Go bool
+			// Direct access to boolean value
 			val := C.duckdb_value_boolean(resultPtr, colIdx, rowIdx)
 			dest[i] = cBoolToGo(val)
 
@@ -357,19 +388,21 @@ func (r *Rows) Next(dest []driver.Value) error {
 			}
 
 		case C.DUCKDB_TYPE_TIMESTAMP, C.DUCKDB_TYPE_TIMESTAMP_S, C.DUCKDB_TYPE_TIMESTAMP_MS, C.DUCKDB_TYPE_TIMESTAMP_NS:
-			// Handle timestamp (microseconds since 1970-01-01)
+			// Use the direct access for timestamps (no string conversion)
+			// With our optimized native implementation
 			ts := C.duckdb_value_timestamp(resultPtr, colIdx, rowIdx)
 			micros := int64(ts.micros)
 			dest[i] = time.Unix(micros/1000000, (micros%1000000)*1000)
 
 		case C.DUCKDB_TYPE_DATE:
-			// Handle date (days since 1970-01-01)
+			// Use the direct access for dates (no string conversion)
+			// With our optimized native implementation
 			date := C.duckdb_value_date(resultPtr, colIdx, rowIdx)
 			days := int64(date.days)
 			dest[i] = time.Unix(days*24*60*60, 0).UTC()
 
 		case C.DUCKDB_TYPE_TIME:
-			// Handle time (microseconds since 00:00:00)
+			// Direct time access
 			timeVal := C.duckdb_value_time(resultPtr, colIdx, rowIdx)
 			micros := int64(timeVal.micros)
 			seconds := micros / 1000000
@@ -415,6 +448,221 @@ func (r *Rows) HasNextResultSet() bool {
 // NextResultSet advances to the next result set.
 func (r *Rows) NextResultSet() error {
 	return io.EOF
+}
+
+// These helper methods enable batch extraction of entire columns at once
+// for improved performance with large datasets
+
+// ExtractInt32Column extracts an entire int32 column using optimized native code
+// Returns the values and null indicators
+func (r *Rows) ExtractInt32Column(colIdx int) ([]int32, []bool, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
+		return nil, nil, io.ErrClosedPipe
+	}
+
+	if colIdx < 0 || colIdx >= len(r.columnNames) {
+		return nil, nil, fmt.Errorf("column index out of range: %d", colIdx)
+	}
+
+	if r.columnTypes[colIdx] != C.DUCKDB_TYPE_INTEGER {
+		return nil, nil, fmt.Errorf("column %d is not an INTEGER", colIdx)
+	}
+
+	// Create slices to hold the results
+	rowCount := int(r.rowCount)
+	values := make([]int32, rowCount)
+	nulls := make([]bool, rowCount)
+
+	// Get a pointer to the result structure
+	var resultPtr *C.duckdb_result
+	if r.resultWrapper != nil {
+		resultPtr = &r.resultWrapper.result
+	} else {
+		resultPtr = r.result
+	}
+
+	// Get pointers to Go slices for C to write directly into
+	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
+	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+
+	// Extract data using our optimized native code
+	// This uses SIMD and other optimizations when available
+	C.extractInt32Column(
+		resultPtr,
+		C.idx_t(colIdx),
+		(*C.int32_t)(unsafe.Pointer(valuesPtr)),
+		(*C.bool)(unsafe.Pointer(nullsPtr)),
+	)
+
+	return values, nulls, nil
+}
+
+// ExtractInt64Column extracts an entire int64 column using optimized native code
+func (r *Rows) ExtractInt64Column(colIdx int) ([]int64, []bool, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
+		return nil, nil, io.ErrClosedPipe
+	}
+
+	if colIdx < 0 || colIdx >= len(r.columnNames) {
+		return nil, nil, fmt.Errorf("column index out of range: %d", colIdx)
+	}
+
+	if r.columnTypes[colIdx] != C.DUCKDB_TYPE_BIGINT {
+		return nil, nil, fmt.Errorf("column %d is not a BIGINT", colIdx)
+	}
+
+	// Create slices to hold the results
+	rowCount := int(r.rowCount)
+	values := make([]int64, rowCount)
+	nulls := make([]bool, rowCount)
+
+	// Get a pointer to the result structure
+	var resultPtr *C.duckdb_result
+	if r.resultWrapper != nil {
+		resultPtr = &r.resultWrapper.result
+	} else {
+		resultPtr = r.result
+	}
+
+	// Get pointers to Go slices for C to write directly into
+	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
+	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+
+	// Extract data using our optimized native code
+	C.extractInt64Column(
+		resultPtr,
+		C.idx_t(colIdx),
+		(*C.int64_t)(unsafe.Pointer(valuesPtr)),
+		(*C.bool)(unsafe.Pointer(nullsPtr)),
+	)
+
+	return values, nulls, nil
+}
+
+// ExtractFloat64Column extracts an entire float64 column using optimized native code
+func (r *Rows) ExtractFloat64Column(colIdx int) ([]float64, []bool, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
+		return nil, nil, io.ErrClosedPipe
+	}
+
+	if colIdx < 0 || colIdx >= len(r.columnNames) {
+		return nil, nil, fmt.Errorf("column index out of range: %d", colIdx)
+	}
+
+	if r.columnTypes[colIdx] != C.DUCKDB_TYPE_DOUBLE {
+		return nil, nil, fmt.Errorf("column %d is not a DOUBLE", colIdx)
+	}
+
+	// Create slices to hold the results
+	rowCount := int(r.rowCount)
+	values := make([]float64, rowCount)
+	nulls := make([]bool, rowCount)
+
+	// Get a pointer to the result structure
+	var resultPtr *C.duckdb_result
+	if r.resultWrapper != nil {
+		resultPtr = &r.resultWrapper.result
+	} else {
+		resultPtr = r.result
+	}
+
+	// Get pointers to Go slices for C to write directly into
+	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
+	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+
+	// Extract data using our optimized native code
+	C.extractFloat64Column(
+		resultPtr,
+		C.idx_t(colIdx),
+		(*C.double)(unsafe.Pointer(valuesPtr)),
+		(*C.bool)(unsafe.Pointer(nullsPtr)),
+	)
+
+	return values, nulls, nil
+}
+
+// ExtractTimestampColumn extracts an entire timestamp column as microseconds since epoch
+func (r *Rows) ExtractTimestampColumn(colIdx int) ([]int64, []bool, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
+		return nil, nil, io.ErrClosedPipe
+	}
+
+	if colIdx < 0 || colIdx >= len(r.columnNames) {
+		return nil, nil, fmt.Errorf("column index out of range: %d", colIdx)
+	}
+
+	if r.columnTypes[colIdx] != C.DUCKDB_TYPE_TIMESTAMP {
+		return nil, nil, fmt.Errorf("column %d is not a TIMESTAMP", colIdx)
+	}
+
+	// Create slices to hold the results
+	rowCount := int(r.rowCount)
+	values := make([]int64, rowCount)
+	nulls := make([]bool, rowCount)
+
+	// Get a pointer to the result structure
+	var resultPtr *C.duckdb_result
+	if r.resultWrapper != nil {
+		resultPtr = &r.resultWrapper.result
+	} else {
+		resultPtr = r.result
+	}
+
+	// Get pointers to Go slices for C to write directly into
+	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
+	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+
+	// Extract data using our optimized native code
+	C.extractTimestampColumn(
+		resultPtr,
+		C.idx_t(colIdx),
+		(*C.int64_t)(unsafe.Pointer(valuesPtr)),
+		(*C.bool)(unsafe.Pointer(nullsPtr)),
+	)
+
+	return values, nulls, nil
+}
+
+// ExtractDateColumn extracts an entire date column as days since epoch
+func (r *Rows) ExtractDateColumn(colIdx int) ([]int32, []bool, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
+		return nil, nil, io.ErrClosedPipe
+	}
+
+	if colIdx < 0 || colIdx >= len(r.columnNames) {
+		return nil, nil, fmt.Errorf("column index out of range: %d", colIdx)
+	}
+
+	if r.columnTypes[colIdx] != C.DUCKDB_TYPE_DATE {
+		return nil, nil, fmt.Errorf("column %d is not a DATE", colIdx)
+	}
+
+	// Create slices to hold the results
+	rowCount := int(r.rowCount)
+	values := make([]int32, rowCount)
+	nulls := make([]bool, rowCount)
+
+	// Get a pointer to the result structure
+	var resultPtr *C.duckdb_result
+	if r.resultWrapper != nil {
+		resultPtr = &r.resultWrapper.result
+	} else {
+		resultPtr = r.result
+	}
+
+	// Get pointers to Go slices for C to write directly into
+	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
+	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+
+	// Extract data using our optimized native code
+	C.extractDateColumn(
+		resultPtr,
+		C.idx_t(colIdx),
+		(*C.int32_t)(unsafe.Pointer(valuesPtr)),
+		(*C.bool)(unsafe.Pointer(nullsPtr)),
+	)
+
+	return values, nulls, nil
 }
 
 // Result represents the result of a query execution.

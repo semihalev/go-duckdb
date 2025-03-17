@@ -80,7 +80,7 @@ func TestFastRowsCloseInScan(t *testing.T) {
 				rows.Close() // This would previously cause a panic
 				t.Fatalf("failed to scan: %v", err)
 			}
-			
+
 			count++
 			if count == 50 {
 				// Close in middle of iteration
@@ -103,7 +103,7 @@ func TestFastRowsCloseInScan(t *testing.T) {
 
 		var id int
 		var s1, s2, s3 string
-		
+
 		// Scan one row
 		if rows.Next() {
 			if err := rows.Scan(&id, &s1, &s2, &s3); err != nil {

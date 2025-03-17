@@ -3,6 +3,7 @@ package duckdb
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"strings"
 	"testing"
@@ -1150,4 +1151,124 @@ func BenchmarkComplexQuery(b *testing.B) {
 			b.Fatalf("error during complex row iteration: %v", err)
 		}
 	}
+}
+
+// BenchmarkNativeCoreIntegration benchmarks the new native optimized core driver
+func BenchmarkNativeCoreIntegration(b *testing.B) {
+	// Connect to DuckDB
+	conn, err := NewConnection(":memory:")
+	if err != nil {
+		b.Fatalf("Failed to connect to DuckDB: %v", err)
+	}
+	defer conn.Close()
+
+	// Create a test table with various data types
+	_, err = conn.ExecDirect(`
+		CREATE TABLE bench_native (
+			id INTEGER, 
+			value DOUBLE,
+			created_at TIMESTAMP,
+			birth_date DATE
+		)
+	`)
+	if err != nil {
+		b.Fatalf("Failed to create table: %v", err)
+	}
+
+	// Insert 100,000 rows with various data types
+	_, err = conn.ExecDirect(`
+		INSERT INTO bench_native 
+		SELECT 
+			i, 
+			i*1.5, 
+			TIMESTAMP '2022-01-01 12:00:00' + INTERVAL (i % 1000) HOUR,
+			DATE '1990-01-01' + INTERVAL (i % 10000) DAY
+		FROM range(0, 100000) t(i)
+	`)
+	if err != nil {
+		b.Fatalf("Failed to insert data: %v", err)
+	}
+
+	// Benchmark traditional row-by-row access
+	b.Run("RowByRow", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			// Prepare and execute query
+			stmt, err := conn.PrepareContext(context.TODO(), "SELECT * FROM bench_native LIMIT 10000")
+			if err != nil {
+				b.Fatalf("Failed to prepare statement: %v", err)
+			}
+
+			rows, err := stmt.(driver.StmtQueryContext).QueryContext(context.Background(), nil)
+			if err != nil {
+				b.Fatalf("Failed to execute query: %v", err)
+			}
+
+			// Process row by row
+			count := 0
+			values := make([]driver.Value, 4)
+
+			for {
+				err := rows.Next(values)
+				if err != nil {
+					break
+				}
+				count++
+			}
+
+			rows.Close()
+			stmt.Close()
+
+			if count != 10000 {
+				b.Fatalf("Expected 10000 rows, got %d", count)
+			}
+		}
+	})
+
+	// Benchmark our new column-oriented optimized extraction
+	b.Run("DirectResult", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		for i := 0; i < b.N; i++ {
+			// Use the direct result API
+			result, err := conn.QueryDirectResult("SELECT * FROM bench_native LIMIT 10000")
+			if err != nil {
+				b.Fatalf("Failed to query: %v", err)
+			}
+
+			// Extract the entire id column at once
+			ids, _, err := result.ExtractInt32Column(0)
+			if err != nil {
+				b.Fatalf("Failed to extract int32 column: %v", err)
+			}
+
+			// Extract the entire value column at once
+			values, _, err := result.ExtractFloat64Column(1)
+			if err != nil {
+				b.Fatalf("Failed to extract float64 column: %v", err)
+			}
+
+			// Extract the entire timestamp column at once
+			timestamps, _, err := result.ExtractTimestampColumn(2)
+			if err != nil {
+				b.Fatalf("Failed to extract timestamp column: %v", err)
+			}
+
+			// Extract the entire date column at once
+			dates, _, err := result.ExtractDateColumn(3)
+			if err != nil {
+				b.Fatalf("Failed to extract date column: %v", err)
+			}
+
+			result.Close()
+
+			if len(ids) != 10000 || len(values) != 10000 ||
+				len(timestamps) != 10000 || len(dates) != 10000 {
+				b.Fatalf("Did not get expected 10000 rows")
+			}
+		}
+	})
 }

@@ -5,6 +5,11 @@
 *.so
 *.dylib
 
+# Exception for the native library directories
+!/lib/**/*.dll
+!/lib/**/*.so
+!/lib/**/*.dylib
+
 # Test binary, built with `go test -c`
 *.test
 

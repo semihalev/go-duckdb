@@ -536,7 +536,6 @@ func TestDriverIntegration(t *testing.T) {
 		driverID string
 	}{
 		{"Standard", "duckdb"},
-		{"Fast", "duckdb-fast"},
 	}
 
 	for _, driver := range drivers {

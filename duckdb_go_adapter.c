@@ -6,6 +6,7 @@
  * 2. Using vectorized operations for column data
  * 3. Minimizing memory allocations and copying
  * 4. Providing zero-copy access where possible
+ * 5. Supporting batch parameter binding for prepared statements
  */
 
 #include <stdlib.h>
@@ -17,11 +18,31 @@
 // Include our adapter header
 #include "duckdb_go_adapter.h"
 
+// Parameter type constants for internal use
+typedef enum {
+    PARAM_NULL = 0,
+    PARAM_BOOL = 1,
+    PARAM_INT8 = 2,
+    PARAM_INT16 = 3,
+    PARAM_INT32 = 4,
+    PARAM_INT64 = 5,
+    PARAM_UINT8 = 6,
+    PARAM_UINT16 = 7,
+    PARAM_UINT32 = 8,
+    PARAM_UINT64 = 9,
+    PARAM_FLOAT = 10,
+    PARAM_DOUBLE = 11,
+    PARAM_STRING = 12,
+    PARAM_BLOB = 13,
+    PARAM_TIMESTAMP = 14
+} param_type_t;
+
 // Forward declarations
 static void destroy_result_buffer(result_buffer_t* buffer);
 static int grow_string_buffer(result_buffer_t* buffer, int64_t additional_size);
 static int process_column_data(duckdb_result* result, result_buffer_t* buffer);
 static int64_t copy_strings_to_buffer(duckdb_result* result, int32_t col, result_buffer_t* buffer);
+static int ensure_param_batch_resource_capacity(param_batch_t* batch);
 
 // Helper functions for boolean conversion - these avoid CGO type conversion issues
 // Use int8_t consistently for all boolean values in the Go interface
@@ -743,4 +764,405 @@ void free_result_buffer(result_buffer_t* buffer) {
         // Otherwise just decrease the reference count
         buffer->ref_count--;
     }
+}
+
+/**
+ * Create a new parameter batch structure
+ * param_count: Number of parameters in each parameter set
+ * batch_size: Number of parameter sets in the batch
+ * Returns a new parameter batch structure
+ */
+param_batch_t* create_param_batch(int32_t param_count, int32_t batch_size) {
+    if (param_count <= 0 || batch_size <= 0) {
+        return NULL; // Invalid parameters
+    }
+    
+    // Allocate the parameter batch structure
+    param_batch_t* batch = calloc(1, sizeof(param_batch_t));
+    if (!batch) {
+        return NULL; // Memory allocation failed
+    }
+    
+    // Initialize batch metadata
+    batch->param_count = param_count;
+    batch->batch_size = batch_size;
+    
+    // Calculate total items (param_count * batch_size)
+    int32_t total_items = param_count * batch_size;
+    
+    // Allocate NULL flags array (1 flag per parameter value)
+    batch->null_flags = calloc(total_items, sizeof(int8_t));
+    if (!batch->null_flags) {
+        free(batch);
+        return NULL;
+    }
+    
+    // Allocate parameter types array (1 type per parameter)
+    batch->param_types = calloc(param_count, sizeof(int32_t));
+    if (!batch->param_types) {
+        free(batch->null_flags);
+        free(batch);
+        return NULL;
+    }
+    
+    // Calculate a reasonable size for the resources array
+    // We need at minimum 2 + param_count resources for initial allocations
+    // Then potentially more for parameter data arrays
+    int32_t resources_size = param_count * 3 + 20; // A reasonable estimation
+    
+    // Allocate resource tracking array with adequate size
+    batch->resources = calloc(resources_size, sizeof(void*));
+    if (!batch->resources) {
+        free(batch->param_types);
+        free(batch->null_flags);
+        free(batch);
+        return NULL;
+    }
+    
+    // Add allocated arrays to resources for cleanup
+    batch->resources[0] = batch->null_flags;
+    batch->resources[1] = batch->param_types;
+    batch->resource_count = 2;
+    
+    return batch;
+}
+
+/**
+ * Ensure the parameter batch resource array has enough capacity
+ * Returns 1 on success, 0 on memory allocation failure
+ */
+static int ensure_param_batch_resource_capacity(param_batch_t* batch) {
+    if (!batch) return 0;
+    
+    // Calculate current size and remaining capacity
+    int32_t min_capacity = batch->param_count * 3 + 20; // Should match initial allocation
+    
+    // If we're running low on capacity (less than 10 slots), expand
+    if (min_capacity - batch->resource_count < 10) {
+        // Calculate new size based on current resource count rather than estimated size
+        // This handles cases where we've allocated more resources than initially estimated
+        int32_t current_allocation = (batch->resources != NULL) ? 
+                                     min_capacity : 0;
+        int32_t new_size = current_allocation > 0 ? 
+                           current_allocation * 2 : min_capacity * 2;
+        
+        // Make sure we have at least min_capacity * 2
+        if (new_size < min_capacity * 2) {
+            new_size = min_capacity * 2;
+        }
+        
+        // Reallocate with larger size
+        void** new_resources = realloc(batch->resources, new_size * sizeof(void*));
+        if (!new_resources) {
+            return 0; // Memory allocation failed
+        }
+        
+        // Clear the newly allocated portion
+        memset(new_resources + batch->resource_count, 0, 
+               (new_size - batch->resource_count) * sizeof(void*));
+        
+        // Update the resources pointer
+        batch->resources = new_resources;
+    }
+    
+    return 1;
+}
+
+/**
+ * Free all resources associated with a parameter batch
+ */
+void free_param_batch(param_batch_t* batch) {
+    if (!batch) return;
+    
+    // First check for string data not in resources array
+    if (batch->string_data) {
+        // Check each string to see if it's tracked in resources
+        int32_t total_items = batch->param_count * batch->batch_size;
+        for (int32_t i = 0; i < total_items; i++) {
+            if (batch->string_data[i]) {
+                // Check if this string is already in our resources array
+                int is_tracked = 0;
+                for (int32_t j = 0; j < batch->resource_count; j++) {
+                    if (batch->resources[j] == batch->string_data[i]) {
+                        is_tracked = 1;
+                        break;
+                    }
+                }
+                
+                // If not tracked, free it directly
+                if (!is_tracked) {
+                    free(batch->string_data[i]);
+                }
+            }
+        }
+    }
+    
+    // Similar checks for blob data
+    if (batch->blob_data) {
+        int32_t total_items = batch->param_count * batch->batch_size;
+        for (int32_t i = 0; i < total_items; i++) {
+            if (batch->blob_data[i]) {
+                // Check if this blob is already in our resources array
+                int is_tracked = 0;
+                for (int32_t j = 0; j < batch->resource_count; j++) {
+                    if (batch->resources[j] == batch->blob_data[i]) {
+                        is_tracked = 1;
+                        break;
+                    }
+                }
+                
+                // If not tracked, free it directly
+                if (!is_tracked) {
+                    free(batch->blob_data[i]);
+                }
+            }
+        }
+    }
+    
+    // Free all tracked resources
+    for (int32_t i = 0; i < batch->resource_count; i++) {
+        if (batch->resources[i]) {
+            free(batch->resources[i]);
+        }
+    }
+    
+    // Free the resources array itself
+    free(batch->resources);
+    
+    // Free the batch structure
+    free(batch);
+}
+
+/**
+ * Bind and execute a parameter batch
+ * This greatly reduces CGO overhead when executing the same prepared statement
+ * with multiple sets of parameters.
+ */
+int bind_and_execute_batch(duckdb_prepared_statement statement, 
+                          param_batch_t* batch,
+                          result_buffer_t* buffer) {
+    if (!statement || !batch || !buffer) {
+        return 0; // Invalid parameters
+    }
+    
+    // Initialize the result buffer
+    memset(buffer, 0, sizeof(result_buffer_t));
+    buffer->ref_count = 1;
+    
+    // Get the actual parameter count from the statement
+    int param_count_actual = duckdb_nparams(statement);
+    if (param_count_actual != batch->param_count) {
+        buffer->error_code = 100;
+        buffer->error_message = strdup("Parameter count mismatch");
+        return 0;
+    }
+    
+    // Create a temporary result to store each execution result
+    duckdb_result result;
+    int successful_executions = 0;
+    int64_t total_rows_affected = 0;
+    
+    // For each parameter set in the batch
+    for (int32_t b = 0; b < batch->batch_size; b++) {
+        // Clear existing bindings before each execution
+        if (duckdb_clear_bindings(statement) == DuckDBError) {
+            buffer->error_code = 101;
+            buffer->error_message = strdup("Failed to clear parameter bindings");
+            return 0;
+        }
+        
+        // Bind each parameter in the set
+        for (int32_t p = 0; p < batch->param_count; p++) {
+            // Calculate the parameter index in the flattened arrays
+            int32_t idx = b * batch->param_count + p;
+            duckdb_state bind_result = DuckDBSuccess;
+            
+            // Check if this parameter is NULL
+            if (batch->null_flags[idx]) {
+                bind_result = duckdb_bind_null(statement, p + 1); // DuckDB parameters are 1-indexed
+                if (bind_result == DuckDBError) {
+                    buffer->error_code = 102;
+                    buffer->error_message = strdup("Failed to bind NULL parameter");
+                    return 0;
+                }
+                continue;
+            }
+            
+            // Bind based on parameter type
+            switch (batch->param_types[p]) {
+                case PARAM_BOOL:
+                    bind_result = duckdb_bind_boolean(statement, p + 1, batch->bool_data[idx]);
+                    break;
+                    
+                case PARAM_INT8:
+                    bind_result = duckdb_bind_int8(statement, p + 1, batch->int8_data[idx]);
+                    break;
+                    
+                case PARAM_INT16:
+                    bind_result = duckdb_bind_int16(statement, p + 1, batch->int16_data[idx]);
+                    break;
+                    
+                case PARAM_INT32:
+                    bind_result = duckdb_bind_int32(statement, p + 1, batch->int32_data[idx]);
+                    break;
+                    
+                case PARAM_INT64:
+                    bind_result = duckdb_bind_int64(statement, p + 1, batch->int64_data[idx]);
+                    break;
+                    
+                case PARAM_UINT8:
+                    bind_result = duckdb_bind_uint8(statement, p + 1, batch->uint8_data[idx]);
+                    break;
+                    
+                case PARAM_UINT16:
+                    bind_result = duckdb_bind_uint16(statement, p + 1, batch->uint16_data[idx]);
+                    break;
+                    
+                case PARAM_UINT32:
+                    bind_result = duckdb_bind_uint32(statement, p + 1, batch->uint32_data[idx]);
+                    break;
+                    
+                case PARAM_UINT64:
+                    bind_result = duckdb_bind_uint64(statement, p + 1, batch->uint64_data[idx]);
+                    break;
+                    
+                case PARAM_FLOAT:
+                    bind_result = duckdb_bind_float(statement, p + 1, batch->float_data[idx]);
+                    break;
+                    
+                case PARAM_DOUBLE:
+                    bind_result = duckdb_bind_double(statement, p + 1, batch->double_data[idx]);
+                    break;
+                    
+                case PARAM_STRING:
+                    if (batch->string_data && batch->string_data[idx]) {
+                        bind_result = duckdb_bind_varchar(statement, p + 1, batch->string_data[idx]);
+                    } else {
+                        bind_result = duckdb_bind_varchar(statement, p + 1, "");
+                    }
+                    break;
+                    
+                case PARAM_BLOB: {
+                    int64_t blob_idx = b * batch->param_count + p;
+                    if (batch->blob_data && batch->blob_data[blob_idx]) {
+                        // Check for both pointer and length
+                        if (batch->blob_lengths && batch->blob_lengths[blob_idx] > 0) {
+                            bind_result = duckdb_bind_blob(statement, p + 1, 
+                                                        batch->blob_data[blob_idx], 
+                                                        batch->blob_lengths[blob_idx]);
+                        } else {
+                            // Zero-length blob
+                            bind_result = duckdb_bind_blob(statement, p + 1, batch->blob_data[blob_idx], 0);
+                        }
+                    } else {
+                        // NULL blob
+                        bind_result = duckdb_bind_blob(statement, p + 1, NULL, 0);
+                    }
+                    break;
+                }
+                    
+                case PARAM_TIMESTAMP: {
+                    duckdb_timestamp ts;
+                    ts.micros = batch->timestamp_data[idx];
+                    bind_result = duckdb_bind_timestamp(statement, p + 1, ts);
+                    break;
+                }
+                    
+                default:
+                    // Unknown parameter type
+                    buffer->error_code = 103;
+                    buffer->error_message = strdup("Unknown parameter type");
+                    return 0;
+            }
+            
+            if (bind_result == DuckDBError) {
+                buffer->error_code = 104;
+                buffer->error_message = strdup("Failed to bind parameter");
+                return 0;
+            }
+        }
+        
+        // Execute the prepared statement with bound parameters
+        if (duckdb_execute_prepared(statement, &result) == DuckDBError) {
+            buffer->error_code = 105;
+            buffer->error_message = strdup(duckdb_result_error(&result));
+            duckdb_destroy_result(&result);
+            return 0;
+        }
+        
+        // Get basic result info
+        int64_t rows_affected = duckdb_rows_changed(&result);
+        total_rows_affected += rows_affected;
+        
+        // For the first result, initialize the buffer if it has column data
+        if (successful_executions == 0) {
+            buffer->row_count = duckdb_row_count(&result);
+            buffer->column_count = duckdb_column_count(&result);
+            
+            // If this is a SELECT statement with results, process the column data
+            if (buffer->row_count > 0 && buffer->column_count > 0) {
+                // Allocate column metadata array
+                buffer->columns = calloc(buffer->column_count, sizeof(column_meta_t));
+                if (!buffer->columns) {
+                    buffer->error_code = 106;
+                    buffer->error_message = strdup("Failed to allocate column metadata memory");
+                    duckdb_destroy_result(&result);
+                    return 0;
+                }
+                
+                // Allocate data pointers array
+                buffer->data_ptrs = calloc(buffer->column_count, sizeof(void*));
+                buffer->nulls_ptrs = calloc(buffer->column_count, sizeof(int8_t*));
+                if (!buffer->data_ptrs || !buffer->nulls_ptrs) {
+                    buffer->error_code = 107;
+                    buffer->error_message = strdup("Failed to allocate data pointers memory");
+                    destroy_result_buffer(buffer);
+                    duckdb_destroy_result(&result);
+                    return 0;
+                }
+                
+                // Allocate resource tracking array
+                buffer->resources = calloc(buffer->column_count * 2 + 10, sizeof(void*)); // Extra space for misc allocations
+                buffer->resource_count = 0;
+                if (!buffer->resources) {
+                    buffer->error_code = 108;
+                    buffer->error_message = strdup("Failed to allocate resource tracking memory");
+                    destroy_result_buffer(buffer);
+                    duckdb_destroy_result(&result);
+                    return 0;
+                }
+                
+                // Store column metadata
+                for (int32_t i = 0; i < buffer->column_count; i++) {
+                    // Get column name - we'll need to free this memory later
+                    buffer->columns[i].name = strdup(duckdb_column_name(&result, i));
+                    buffer->resources[buffer->resource_count++] = buffer->columns[i].name;
+                    
+                    // Get column type information
+                    buffer->columns[i]._type = duckdb_column_type(&result, i);
+                    buffer->columns[i].nullable = 1; // Assume all columns are nullable for now
+                }
+                
+                // Process column data - this does the heavy lifting
+                if (!process_column_data(&result, buffer)) {
+                    destroy_result_buffer(buffer);
+                    duckdb_destroy_result(&result);
+                    return 0;
+                }
+                
+                // Only process the first result set with data
+                // For batched statements, we typically expect DML statements without result sets
+            }
+        }
+        
+        // Clean up this result
+        duckdb_destroy_result(&result);
+        successful_executions++;
+    }
+    
+    // Store the total number of affected rows
+    buffer->rows_affected = total_rows_affected;
+    
+    // Return success if at least one execution was successful
+    return (successful_executions > 0);
 }
