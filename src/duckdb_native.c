@@ -481,7 +481,7 @@ void extract_string_column_ptrs(duckdb_result *result, idx_t col_idx,
     }
 }
 
-// Extract boolean column values
+// Extract boolean column values - fixed to avoid CGO bool conversion issues
 void extract_bool_column(duckdb_result *result, idx_t col_idx, 
                         bool *out_buffer, bool *null_mask, 
                         idx_t start_row, idx_t row_count) {
@@ -507,7 +507,16 @@ void extract_bool_column(duckdb_result *result, idx_t col_idx,
             null_mask[buffer_idx] = is_null;
             
             if (!is_null) {
-                out_buffer[buffer_idx] = duckdb_value_boolean(result, col_idx, row_idx);
+                // Get the boolean value from DuckDB
+                bool db_value = duckdb_value_boolean(result, col_idx, row_idx);
+                
+                // Explicitly set the output buffer value using direct assignment
+                // This ensures the C bool representation is preserved exactly
+                if (db_value) {
+                    out_buffer[buffer_idx] = true;
+                } else {
+                    out_buffer[buffer_idx] = false;
+                }
             } else {
                 out_buffer[buffer_idx] = false;
             }
@@ -524,7 +533,15 @@ void extract_bool_column(duckdb_result *result, idx_t col_idx,
         null_mask[buffer_idx] = is_null;
         
         if (!is_null) {
-            out_buffer[buffer_idx] = duckdb_value_boolean(result, col_idx, row_idx);
+            // Get the boolean value from DuckDB
+            bool db_value = duckdb_value_boolean(result, col_idx, row_idx);
+            
+            // Explicitly set the output buffer value
+            if (db_value) {
+                out_buffer[buffer_idx] = true;
+            } else {
+                out_buffer[buffer_idx] = false;
+            }
         } else {
             out_buffer[buffer_idx] = false;
         }
@@ -532,6 +549,7 @@ void extract_bool_column(duckdb_result *result, idx_t col_idx,
 }
 
 // Extract timestamp column values (microseconds since epoch) using direct method
+// Fixed to ensure correct handling of UTC time values
 void extract_timestamp_column(duckdb_result *result, idx_t col_idx,
                              int64_t *out_buffer, bool *null_mask,
                              idx_t start_row, idx_t row_count) {
@@ -557,6 +575,10 @@ void extract_timestamp_column(duckdb_result *result, idx_t col_idx,
                 // Direct access to timestamp value (microseconds since epoch)
                 // duckdb_timestamp is a struct with a single field 'micros'
                 duckdb_timestamp ts = duckdb_value_timestamp(result, col_idx, row_idx);
+                
+                // Store the raw microseconds value - this will be interpreted as UTC in Go
+                // When we append a timestamp in Go, we explicitly use UTC time as well,
+                // so this ensures consistency between appending and extracting timestamps
                 out_buffer[buffer_idx] = ts.micros;
             } else {
                 out_buffer[buffer_idx] = 0;

@@ -90,7 +90,9 @@ func (a *Appender) AppendRow(values ...interface{}) error {
 
 // appendValue appends a single value to the row.
 func (a *Appender) appendValue(value interface{}) error {
+	// Handle nil values (SQL NULL)
 	if value == nil {
+		// Use DuckDB's dedicated NULL append function
 		if err := C.duckdb_append_null(*a.appender); err == C.DuckDBError {
 			return fmt.Errorf("failed to append NULL: %s", goString(C.duckdb_appender_error(*a.appender)))
 		}
@@ -100,12 +102,8 @@ func (a *Appender) appendValue(value interface{}) error {
 	// Append based on type
 	switch v := value.(type) {
 	case bool:
-		// Convert bool to int8 (0 or 1) for DuckDB
-		var boolVal C.int8_t
-		if v {
-			boolVal = C.int8_t(1)
-		}
-		if err := C.duckdb_append_int8(*a.appender, boolVal); err == C.DuckDBError {
+		// Use the DuckDB API's boolean append function directly
+		if err := C.duckdb_append_bool(*a.appender, C.bool(v)); err == C.DuckDBError {
 			return fmt.Errorf("failed to append boolean: %s", goString(C.duckdb_appender_error(*a.appender)))
 		}
 
@@ -191,7 +189,11 @@ func (a *Appender) appendValue(value interface{}) error {
 
 	case time.Time:
 		// Convert to DuckDB timestamp (microseconds since 1970-01-01)
-		micros := v.Unix()*1000000 + int64(v.Nanosecond())/1000
+		// Explicitly convert to UTC to ensure consistent behavior
+		utcTime := v.UTC()
+		// Calculate microseconds since epoch
+		micros := utcTime.Unix()*1000000 + int64(utcTime.Nanosecond())/1000
+		// Create a DuckDB timestamp from microseconds
 		ts := C.duckdb_timestamp{micros: C.int64_t(micros)}
 		if err := C.duckdb_append_timestamp(*a.appender, ts); err == C.DuckDBError {
 			return fmt.Errorf("failed to append timestamp: %s", goString(C.duckdb_appender_error(*a.appender)))

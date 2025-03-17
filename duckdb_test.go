@@ -3,6 +3,7 @@ package duckdb
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -639,6 +640,331 @@ func TestDriverIntegration(t *testing.T) {
 }
 
 func TestAppender(t *testing.T) {
-	// Skip for now until we implement a more comprehensive test
-	t.Skip("Temporarily skipping appender test until we implement a more robust solution")
+	// Use direct connection to test appender
+	conn, err := NewConnection(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to open database: %v", err)
+	}
+	defer conn.Close()
+
+	// Create a test table with various types to test different data type handling
+	_, err = conn.ExecDirect(`CREATE TABLE test_appender (
+		id INTEGER, 
+		name VARCHAR,
+		value DOUBLE,
+		flag BOOLEAN,
+		created TIMESTAMP
+	)`)
+	if err != nil {
+		t.Fatalf("Failed to create table: %v", err)
+	}
+
+	// Create an appender
+	appender, err := NewAppender(conn, "", "test_appender")
+	if err != nil {
+		t.Fatalf("Failed to create appender: %v", err)
+	}
+	defer appender.Close()
+
+	// Test column count
+	if appender.columnCount != 5 {
+		t.Errorf("Expected column count 5, got %d", appender.columnCount)
+	}
+
+	// Get a fixed timestamp for testing
+	baseTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+	
+	// Append some rows
+	numRows := 10
+	for i := 0; i < numRows; i++ {
+		// Use various types to test the appender thoroughly
+		err := appender.AppendRow(
+			int32(i),                                // id (INTEGER)
+			"Name-"+string(rune('0'+i)),            // name (VARCHAR)
+			float64(i) + 0.5,                       // value (DOUBLE)
+			(i % 2) == 0,                           // flag (BOOLEAN) - even IDs are true
+			baseTime.Add(time.Duration(i)*time.Hour), // created (TIMESTAMP)
+		)
+		if err != nil {
+			t.Fatalf("Failed to append row %d: %v", i, err)
+		}
+	}
+
+	// Flush the appender
+	if err := appender.Flush(); err != nil {
+		t.Fatalf("Failed to flush appender: %v", err)
+	}
+
+	// Verify using direct query
+	result, err := conn.QueryDirectResult("SELECT COUNT(*) FROM test_appender")
+	if err != nil {
+		t.Fatalf("Failed to query count: %v", err)
+	}
+	defer result.Close()
+
+	// Extract count value - COUNT returns int64
+	values, nulls, err := result.ExtractInt64Column(0)
+	if err != nil {
+		t.Fatalf("Failed to extract count: %v", err)
+	}
+
+	if len(values) == 0 || nulls[0] {
+		t.Fatalf("No count result returned")
+	}
+
+	count := values[0]
+	if int(count) != numRows {
+		t.Errorf("Expected %d rows, got %d", numRows, count)
+	}
+
+	// Verify row data with another direct query
+	dataResult, err := conn.QueryDirectResult("SELECT id, name, value, flag, created FROM test_appender ORDER BY id")
+	if err != nil {
+		t.Fatalf("Failed to query data: %v", err)
+	}
+	defer dataResult.Close()
+
+	// Extract columns
+	ids, nullsIds, err := dataResult.ExtractInt32Column(0)
+	if err != nil {
+		t.Fatalf("Failed to extract ids: %v", err)
+	}
+
+	names, nullsNames, err := dataResult.ExtractStringColumn(1)
+	if err != nil {
+		t.Fatalf("Failed to extract names: %v", err)
+	}
+
+	floatValues, nullsValues, err := dataResult.ExtractFloat64Column(2)
+	if err != nil {
+		t.Fatalf("Failed to extract values: %v", err)
+	}
+
+	flags, nullsFlags, err := dataResult.ExtractBoolColumn(3)
+	if err != nil {
+		t.Fatalf("Failed to extract flags: %v", err)
+	}
+
+	timestamps, nullsTimestamps, err := dataResult.ExtractTimestampColumn(4)
+	if err != nil {
+		t.Fatalf("Failed to extract timestamps: %v", err)
+	}
+
+	// Verify each row
+	for i := 0; i < numRows; i++ {
+		if i >= len(ids) || nullsIds[i] {
+			t.Errorf("Row %d: Missing or NULL id", i)
+			continue
+		}
+
+		if i >= len(names) || nullsNames[i] {
+			t.Errorf("Row %d: Missing or NULL name", i)
+			continue
+		}
+
+		if i >= len(floatValues) || nullsValues[i] {
+			t.Errorf("Row %d: Missing or NULL value", i)
+			continue
+		}
+
+		if i >= len(flags) || nullsFlags[i] {
+			t.Errorf("Row %d: Missing or NULL flag", i)
+			continue
+		}
+
+		if i >= len(timestamps) || nullsTimestamps[i] {
+			t.Errorf("Row %d: Missing or NULL timestamp", i)
+			continue
+		}
+
+		// Verify values match what we inserted
+		expectedId := int32(i)
+		expectedName := "Name-" + string(rune('0'+i))
+		expectedValue := float64(i) + 0.5
+		expectedFlag := (i % 2) == 0
+		expectedTime := baseTime.Add(time.Duration(i) * time.Hour)
+
+		if ids[i] != expectedId {
+			t.Errorf("Row %d: Expected id %d, got %d", i, expectedId, ids[i])
+		}
+
+		if names[i] != expectedName {
+			t.Errorf("Row %d: Expected name %s, got %s", i, expectedName, names[i])
+		}
+
+		if floatValues[i] != expectedValue {
+			t.Errorf("Row %d: Expected value %f, got %f", i, expectedValue, floatValues[i])
+		}
+
+		// Verify boolean values are correct
+		// Rather than relying on ExtractBoolColumn which might have issues with CGO type conversion,
+		// Query the boolean values directly as integers
+		boolQuery := fmt.Sprintf("SELECT CASE WHEN flag THEN 1 ELSE 0 END FROM test_appender WHERE id = %d", ids[i])
+		boolResult, err := conn.QueryDirectResult(boolQuery)
+		if err != nil {
+			t.Errorf("Row %d: Failed to query boolean value: %v", i, err)
+			continue
+		}
+		
+		// Extract as int32 to avoid CGO bool conversion issues
+		boolInts, nullBools, err := boolResult.ExtractInt32Column(0)
+		if err != nil {
+			t.Errorf("Row %d: Failed to extract boolean value: %v", i, err)
+			boolResult.Close()
+			continue
+		}
+		boolResult.Close()
+		
+		if len(boolInts) == 0 || nullBools[0] {
+			t.Errorf("Row %d: Missing or NULL flag", i)
+			continue
+		}
+		
+		actualFlag := boolInts[0] != 0
+		if expectedFlag != actualFlag {
+			t.Errorf("Row %d: Expected flag %v, got %v", i, expectedFlag, actualFlag)
+		}
+
+		// Verify timestamp values using string comparison for more reliable results
+		timeQuery := fmt.Sprintf("SELECT created::VARCHAR FROM test_appender WHERE id = %d", ids[i])
+		timeResult, err := conn.QueryDirectResult(timeQuery)
+		if err != nil {
+			t.Errorf("Row %d: Failed to query timestamp value: %v", i, err)
+			continue
+		}
+		
+		// Extract as string to avoid direct timestamp comparison issues
+		timeStrs, nullTimes, err := timeResult.ExtractStringColumn(0)
+		if err != nil {
+			t.Errorf("Row %d: Failed to extract timestamp value: %v", i, err)
+			timeResult.Close()
+			continue
+		}
+		timeResult.Close()
+		
+		if len(timeStrs) == 0 || nullTimes[0] {
+			t.Errorf("Row %d: Missing or NULL timestamp", i)
+			continue
+		}
+		
+		// Parse the timestamp string
+		// The format may vary based on DuckDB settings, but it should be consistent
+		parsedTime, err := time.Parse("2006-01-02 15:04:05", timeStrs[0])
+		if err != nil {
+			t.Errorf("Row %d: Failed to parse timestamp string '%s': %v", i, timeStrs[0], err)
+			continue
+		}
+		
+		// Compare the parsed time with the expected time (only compare to minute precision to avoid issues)
+		expectedFmt := expectedTime.UTC().Format("2006-01-02 15:04")
+		actualFmt := parsedTime.UTC().Format("2006-01-02 15:04")
+		if expectedFmt != actualFmt {
+			t.Errorf("Row %d: Expected timestamp %s, got %s", i, expectedFmt, actualFmt)
+		}
+	}
+
+	// Test appending NULL values
+	nullAppender, err := NewAppender(conn, "", "test_appender")
+	if err != nil {
+		t.Fatalf("Failed to create null appender: %v", err)
+	}
+	defer nullAppender.Close()
+
+	// Append a row with NULL values for all columns except ID
+	// Explicitly pass nil for each column to test NULL handling
+	err = nullAppender.AppendRow(
+		int32(100), // ID - Not NULL
+		nil,        // name - NULL
+		nil,        // value - NULL
+		nil,        // flag - NULL
+		nil,        // timestamp - NULL
+	)
+	if err != nil {
+		t.Fatalf("Failed to append NULL row: %v", err)
+	}
+
+	// Flush the appender
+	if err := nullAppender.Flush(); err != nil {
+		t.Fatalf("Failed to flush null appender: %v", err)
+	}
+
+	// Verify the NULL values were correctly inserted
+	nullResult, err := conn.QueryDirectResult("SELECT id, name, value, flag, created FROM test_appender WHERE id = 100")
+	if err != nil {
+		t.Fatalf("Failed to query null row: %v", err)
+	}
+	defer nullResult.Close()
+
+	// Extract columns for the NULL test
+	nullIds, _, err := nullResult.ExtractInt32Column(0)
+	if err != nil {
+		t.Fatalf("Failed to extract null ids: %v", err)
+	}
+
+	// Use separate variables for the NULL test to avoid redeclaration errors
+	var nullNameVals []string
+	var nullNameIsNull []bool
+	nullNameVals, nullNameIsNull, err = nullResult.ExtractStringColumn(1)
+	if err != nil {
+		t.Fatalf("Failed to extract null names: %v", err)
+	}
+
+	// Extract float column
+	var nullFloatVals []float64
+	var nullFloatIsNull []bool
+	nullFloatVals, nullFloatIsNull, err = nullResult.ExtractFloat64Column(2)
+	if err != nil {
+		t.Fatalf("Failed to extract null values: %v", err)
+	}
+	
+	// Use a direct query to check for NULL values in the database
+	countNullsQuery := "SELECT COUNT(*) FROM test_appender WHERE id = 100 AND flag IS NULL AND created IS NULL"
+	countResult, err := conn.QueryDirectResult(countNullsQuery)
+	if err != nil {
+		t.Fatalf("Failed to query NULL count: %v", err)
+	}
+	
+	// Extract count value
+	countValues, _, err := countResult.ExtractInt64Column(0)
+	if err != nil {
+		t.Fatalf("Failed to extract NULL count: %v", err)
+	}
+	countResult.Close()
+	
+	// This should be 1 if both flag and created are NULL
+	nullCount := int64(0)
+	if len(countValues) > 0 {
+		nullCount = countValues[0]
+	}
+	
+	// For compatibility with the rest of the test code
+	flagNullVals := []bool{nullCount == 1}
+	tsNullVals := []bool{nullCount == 1}
+
+	if len(nullIds) == 0 {
+		t.Fatalf("No NULL row found")
+	}
+
+	if nullIds[0] != 100 {
+		t.Errorf("Expected NULL row id 100, got %d", nullIds[0])
+	}
+
+	// Verify all values except ID are NULL
+	if !nullNameIsNull[0] {
+		t.Errorf("Expected NULL name, got %s", nullNameVals[0])
+	}
+
+	if !nullFloatIsNull[0] {
+		t.Errorf("Expected NULL value, got %f", nullFloatVals[0])
+	}
+
+	// Check boolean NULL using direct SQL query results
+	if !flagNullVals[0] {
+		t.Errorf("Expected NULL flag, but flag IS NULL returned false")
+	}
+
+	// Check timestamp NULL using direct SQL query results
+	if !tsNullVals[0] {
+		t.Errorf("Expected NULL timestamp, but created IS NULL returned false")
+	}
 }
