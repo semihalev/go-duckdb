@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include "../include/duckdb.h"
 #include "../include/duckdb_native.h"
 
@@ -101,5 +102,7 @@ void extract_row_batch(duckdb_result *result, void *out_buffer,
                      idx_t start_row, idx_t row_count, idx_t row_size) {
     // Stub implementation
 }
+
+// Reserved for future optimizations
 
 #endif // DUCKDB_NATIVE_SHIM_C

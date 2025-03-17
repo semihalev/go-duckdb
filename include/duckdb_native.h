@@ -75,6 +75,8 @@ void extract_row_batch(duckdb_result *result, void *out_buffer,
                      idx_t *col_offsets, idx_t *col_types, idx_t col_count,
                      idx_t start_row, idx_t row_count, idx_t row_size);
 
+// Reserved for future optimizations
+
 #ifdef __cplusplus
 }
 #endif

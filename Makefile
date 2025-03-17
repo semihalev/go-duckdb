@@ -9,7 +9,7 @@ all: native build test examples
 
 native:
 	@echo "Building native optimizations..."
-	cd src && $(MAKE)
+	cd src && chmod +x build.sh && ./build.sh
 	@echo "Building native shim library..."
 	cd native && $(MAKE) && $(MAKE) install
 

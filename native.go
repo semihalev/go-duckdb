@@ -32,6 +32,8 @@ var (
 	funcExtractBlobColumn      unsafe.Pointer
 	funcFilterInt32ColumnGt    unsafe.Pointer
 	funcExtractRowBatch        unsafe.Pointer
+	
+	// Reserved for future optimizations
 )
 
 // NativeOptimizationsAvailable returns true if native SIMD optimizations are available
@@ -129,6 +131,7 @@ func findNativeLibraryPath() string {
 	// Try all paths
 	for _, path := range searchPaths {
 		if _, err := os.Stat(path); err == nil {
+			fmt.Printf("Found native library at: %s\n", path)
 			return path
 		}
 	}
@@ -189,6 +192,8 @@ func loadNativeFunctions() bool {
 	if err != nil {
 		return false
 	}
+
+	// Reserved for future optimizations
 
 	return true
 }
