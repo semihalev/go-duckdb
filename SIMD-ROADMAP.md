@@ -112,7 +112,7 @@ We have implemented a dynamic library architecture that provides several key ben
 
 1. **True Vectorized Operations**
    - ✅ Remove custom sum operations (DuckDB already has optimized implementations)
-   - Implement SIMD-accelerated string comparison
+   - Implement SIMD-accelerated string and time operations (detailed plan below)
    - Create optimized filtering operations with SIMD
 
 2. **Enhance Memory Management**
@@ -124,6 +124,229 @@ We have implemented a dynamic library architecture that provides several key ben
    - Optimize memory layout for cache efficiency
    - Implement column-wise filtering with SIMD
    - Create specialized extractors for common analytics patterns
+
+## Vectorized String and Time Operations Plan
+
+The plan below outlines our comprehensive approach to implementing true vectorized operations for string and time data types, which are critical for analytics workloads.
+
+### Phase 1: Core SIMD Functions (3 weeks)
+
+#### String SIMD Implementations
+- Implement `simd_string_equals` using AVX2 (x86_64) and NEON (ARM64)
+- Create `simd_string_contains` for fast substring searches
+- Add `simd_string_starts_with` and `simd_string_ends_with`
+- Implement vectorized string hashing for GROUP BY operations
+- Develop optimized string buffer pooling with zero-copy architecture
+- Create pure Go fallbacks for all operations
+
+#### Time SIMD Implementations
+- Implement `simd_timestamp_extract` for rapid extraction of date components
+- Create `simd_timestamp_compare` for fast timestamp comparisons
+- Add `simd_date_diff` for calculating date differences in bulk
+- Implement vectorized timezone conversion
+- Add specialized handling for common date formats
+- Create optimized date arithmetic operations
+
+#### Benchmark Suite
+- Develop comprehensive benchmarks comparing vectorized vs. non-vectorized operations
+- Test with various string lengths, patterns, and data distributions
+- Create time operation benchmarks with varying time ranges and formats
+- Measure both throughput and latency improvements
+- Track memory allocation reductions
+
+### Phase 2: Query Integration (2-3 weeks)
+
+#### DirectResult Interface Enhancements
+- Optimize `ExtractStringColumn` to use SIMD functions with zero-copy
+- Add `FilterStringsByPattern` for efficient string filtering
+- Implement improved `ExtractTimestampColumn` and `ExtractDateColumn`
+- Create `ExtractDateParts` for rapid year/month/day extraction
+- Add `FilterTimesByRange` for efficient time range queries
+- Implement batch comparison operations for both strings and timestamps
+
+#### Query Path Integration
+- Enhance string parameter binding with SIMD equality checks
+- Improve timestamp parameter handling
+- Add vectorized date arithmetic to query processing
+- Optimize string and date extraction in result sets
+- Implement efficient timezone handling
+- Add specialized handling for common predicates
+
+#### Connection API Additions
+- Add `QueryWithStringFilter` for optimized string filtering
+- Create `QueryWithTimeRangeFilter` for time-based queries
+- Implement batch parameter binding optimizations for time data
+- Add specialized time-series query functions
+
+### Phase 3: Advanced Features (3-4 weeks)
+
+#### Pattern Matching and Complex String Operations
+- Implement SIMD-accelerated LIKE operations
+- Add optimized regex pre-filtering with SIMD
+- Create specialized handling for common string patterns
+- Implement vectorized string transformation functions
+- Add string aggregation optimizations
+- Create efficient JSON string path extraction
+
+#### Advanced Time Operations
+- Implement SIMD-accelerated date windowing functions
+- Add vectorized calendar calculations (business days, holidays)
+- Create optimized time bucketing for analytics
+- Implement period calculations (month/quarter boundaries)
+- Add specialized time-series moving window functions
+- Create vectorized date formatting/parsing functions
+
+#### Combined String and Time Operations
+- Optimize EXTRACT(YEAR FROM timestamp) operations
+- Add efficient date parsing from strings
+- Implement vectorized date-to-string formatting
+- Create combined filtering operations
+- Add specialized handling for common timestamp formats in strings
+
+### Implementation Details
+
+#### Key C Functions for String Operations
+```c
+// Core SIMD string functions
+bool simd_string_equals(const char* a, size_t a_len, const char* b, size_t b_len);
+bool simd_string_contains(const char* haystack, size_t h_len, const char* needle, size_t n_len);
+bool simd_string_starts_with(const char* str, size_t str_len, const char* prefix, size_t prefix_len);
+bool simd_string_ends_with(const char* str, size_t str_len, const char* suffix, size_t suffix_len);
+
+// Batch operations
+int32_t simd_filter_strings_by_pattern(char** strings, int32_t* lengths, bool* nulls, 
+                                      int32_t count, const char* pattern, int32_t pattern_len,
+                                      int32_t pattern_type, int32_t* out_indices);
+
+// Optimized string extraction
+void extract_string_column_simd(duckdb_result* result, idx_t col_idx,
+                               char** out_ptrs, int32_t* out_lens, bool* null_mask,
+                               idx_t start_row, idx_t row_count);
+```
+
+#### Key C Functions for Time Operations
+```c
+// Core SIMD timestamp functions
+void simd_extract_date_parts(int64_t* timestamps, bool* nulls, int32_t count,
+                            int32_t* out_years, int32_t* out_months, int32_t* out_days);
+
+void simd_extract_time_parts(int64_t* timestamps, bool* nulls, int32_t count,
+                            int32_t* out_hours, int32_t* out_minutes, int32_t* out_seconds, 
+                            int32_t* out_micros);
+
+int32_t simd_filter_timestamps_by_range(int64_t* timestamps, bool* nulls, int32_t count,
+                                      int64_t start_ts, int64_t end_ts, int32_t* out_indices);
+
+// Date arithmetic operations
+void simd_add_days_to_timestamps(int64_t* timestamps, bool* nulls, int32_t count,
+                                int32_t days_to_add, int64_t* out_timestamps);
+
+// Date difference calculations
+void simd_calculate_date_diffs(int64_t* ts1, int64_t* ts2, bool* nulls, int32_t count,
+                              int32_t diff_unit, int32_t* out_diffs);
+```
+
+#### Go API Additions for String Operations
+```go
+// DirectResult interface additions
+func (dr *DirectResult) FilterStringsByPattern(colIdx int, pattern string, 
+    patternType PatternType) ([]int, error)
+
+func (dr *DirectResult) FindStringIndices(colIdx int, target string, 
+    matchType MatchType) ([]int, error)
+
+// Connection interface additions
+func (conn *Connection) QueryWithStringFilter(query string, params []interface{}, 
+    filterCol string, pattern string, patternType PatternType) (*DirectResult, error)
+```
+
+#### Go API Additions for Time Operations
+```go
+// DirectResult interface additions for time operations
+func (dr *DirectResult) ExtractDateParts(colIdx int) ([]DateParts, []bool, error)
+
+func (dr *DirectResult) FilterTimesByRange(colIdx int, start, end time.Time) ([]int, error)
+
+func (dr *DirectResult) ExtractTimeInUnit(colIdx int, unit TimeUnit) ([]int, []bool, error)
+
+// Connection interface additions
+func (conn *Connection) QueryWithTimeRangeFilter(query string, params []interface{}, 
+    timeCol string, start, end time.Time) (*DirectResult, error)
+```
+
+### Expected Performance Benefits
+
+Based on similar implementations and preliminary testing:
+
+#### String Operations
+- 4-8x speedup for string equality comparisons
+- 2-5x speedup for substring operations
+- 3-6x speedup for string filtering operations
+- 40-60% reduction in memory allocations for string processing
+
+#### Time Operations
+- 5-10x speedup for date parts extraction
+- 3-7x speedup for time-based filtering
+- 2-4x speedup for time-series aggregations
+- 30-50% reduction in CPU utilization for time-heavy workloads
+
+### Implementation Timeline
+
+1. **Weeks 1-2:** 
+   - Implement core string SIMD functions
+   - Implement basic timestamp extraction and comparison
+   - Set up benchmarking infrastructure
+
+2. **Weeks 3-4:**
+   - Add date parts extraction and filtering
+   - Integrate with DirectResult interface
+   - Create initial benchmarks and performance reports
+
+3. **Weeks 5-6:**
+   - Implement advanced date arithmetic
+   - Add string pattern matching
+   - Optimize for timezone handling
+   - Integrate with query paths
+
+4. **Weeks 7-8:**
+   - Combine string and time operations
+   - Polish APIs and documentation
+   - Fine-tune performance
+   - Complete comprehensive testing
+
+### Use Case Examples
+
+#### Efficient Time-Series Analysis
+```go
+// Extract timestamps and values with SIMD acceleration
+timestamps, _, _ := result.ExtractTimestampColumn(0)
+values, _, _ := result.ExtractFloat64Column(1)
+
+// Extract date parts for all timestamps at once
+dateParts, _, _ := result.ExtractDateParts(0)
+
+// Group by month using vectorized date parts
+monthlyAverages := make(map[int]float64)
+monthCounts := make(map[int]int)
+
+for i := range timestamps {
+    month := dateParts[i].Month
+    monthlyAverages[month] += values[i]
+    monthCounts[month]++
+}
+```
+
+#### Advanced String Filtering
+```go
+// Filter strings with SIMD-accelerated pattern matching
+indices, err := result.FilterStringsByPattern(nameCol, "A%", PatternStartsWith)
+
+// Extract only the matching rows
+matchingIds, _, _ := result.ExtractInt32ColumnByIndices(idCol, indices)
+matchingNames, _, _ := result.ExtractStringColumnByIndices(nameCol, indices)
+```
+
+This plan provides a comprehensive roadmap for implementing true vectorized operations for both string and time data types, significantly enhancing the performance of the go-duckdb driver for analytics workloads.
 
 ### Long-term Vision
 
