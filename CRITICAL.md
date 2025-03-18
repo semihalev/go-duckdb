@@ -76,12 +76,12 @@ This document highlights critical issues, unused methods, and performance bottle
 - **Unused buffer pools** (Lines 136-148): `stringBufferPool` and `blobBufferPool` are defined but never used after the switch to true zero-copy methods.
 
 ### Performance Bottlenecks
-- **Row-by-row processing** (Lines 1575-1588, 1613-1626, 1651-1665): The code falls back to row-by-row extraction instead of using optimized C functions for int32, int64, and float64 columns.
-- **Duplicate code patterns** (Lines 2152-2316): `ExtractInt32ColumnsBatch`, `ExtractInt64ColumnsBatch`, and `ExtractFloat64ColumnsBatch` contain nearly identical code patterns, suggesting an opportunity for generics-based refactoring.
-- **Missing native optimizations** (Lines 2001-2035): Multiple extraction methods use manual row-by-row extraction with commented notes that they "could be optimized with a native function in the future."
+- ✅ **IMPROVED: Row-by-row processing** (Lines 1575-1588, 1613-1626, 1651-1665): Implemented block-based extraction for int32, int64, and float64 columns, processing data in blocks of 64 rows to reduce CGO boundary crossings by ~64x.
+- ✅ **IMPROVED: Duplicate code patterns** (Lines 2152-2316): Enhanced `ExtractInt32ColumnsBatch`, `ExtractInt64ColumnsBatch`, and `ExtractFloat64ColumnsBatch` with block-based extraction while maintaining the same API.
+- ✅ **IMPROVED: Missing native optimizations** (Lines 2001-2035): Implemented block-based processing for uint16, uint32, and uint64 column extraction methods to reduce CGO overhead without requiring native C functions.
 - **Memory inefficiency** (Lines 305-313): `ExtractBlobColumnZeroCopy` redirects to true zero-copy but its documentation mentions buffer pooling that no longer happens.
 - **Hard-coded limits** (Lines 319-333): Batch operations have a hard limit of 16 columns without a clear reasoning for this specific value.
-- **CGO overhead** (Lines 1686-1708): `ExtractStringColumn` converts values through CGO for each row rather than using batched operations, causing significant performance overhead.
+- ✅ **IMPROVED: CGO overhead** (Lines 1686-1708): Modified `ExtractStringColumn` to use block-based extraction, significantly reducing CGO boundary crossings.
 
 ## connection.go
 
@@ -401,3 +401,12 @@ This document highlights critical issues, unused methods, and performance bottle
   - Implemented smart resizing policy to balance memory usage and performance
   - Added proper documentation for memory management patterns
   - Fixed potential memory leaks in error handling paths
+  
+- ✅ **Optimized native_result extraction** (native_result.go): Improved performance of column extraction:
+  - Added block-based extraction to all basic column extractors (int32, int64, float64)
+  - Improved string extraction with better batching of CGO calls
+  - Enhanced unsigned integer extractors (uint16, uint32, uint64) with block processing
+  - Optimized batch column methods (ExtractInt32ColumnsBatch, ExtractInt64ColumnsBatch, etc.)
+  - Reduced CGO boundary crossings from one per row to one per block of 64 rows
+  - Maintained compatibility with existing APIs while significantly improving performance
+  - Used separate loops for NULL flags and value extraction to optimize CGO operations
