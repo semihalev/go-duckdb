@@ -82,7 +82,7 @@ func (st *StringTable) GetOrCreateString(ptr unsafe.Pointer, length int) string 
 	if val, ok := st.strings.Load(key); ok {
 		// Increment reference count while holding the lock
 		st.mu.Lock()
-		
+
 		// Double-check the key still exists after acquiring the lock
 		if rc, ok := st.refCounts.Load(key); ok {
 			st.refCounts.Store(key, rc.(int)+1)
@@ -91,7 +91,7 @@ func (st *StringTable) GetOrCreateString(ptr unsafe.Pointer, length int) string 
 			return val.(string)
 		}
 		st.mu.Unlock()
-		
+
 		// Key was removed between our check and lock, continue to slow path
 	}
 
@@ -137,9 +137,9 @@ func (st *StringTable) Release(ptr unsafe.Pointer) {
 	if ptr == nil {
 		return
 	}
-	
+
 	key := uintptr(ptr)
-	
+
 	// Acquire lock for the entire operation to ensure atomicity
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -2451,16 +2451,21 @@ drain:
 
 	// If we have any errors, return them all
 	if len(errors) > 0 {
-		// Create a combined error message
-		errMsg := fmt.Sprintf("%d errors occurred during parallel extraction. First error: %v", 
-			len(errors), errors[0])
-		
-		// For debugging, include all errors
-		if len(errors) > 1 {
-			errMsg += fmt.Sprintf(". Additional errors: %v", errors[1:])
+		// Handle the single error case with a constant format string
+		if len(errors) == 1 {
+			return nil, nil, fmt.Errorf("an error occurred during parallel extraction: %w", errors[0])
 		}
-		
-		return nil, nil, fmt.Errorf(errMsg)
+
+		// For multiple errors, create a combined error message with the first one wrapped
+		// and additional errors included in the message for debugging
+		additionalInfo := ""
+		for i, err := range errors[1:] {
+			additionalInfo += fmt.Sprintf(" [%d]: %v", i+1, err)
+		}
+
+		// Use a constant format string to avoid security risks
+		return nil, nil, fmt.Errorf("multiple errors occurred during parallel extraction: %w (additional errors:%s)",
+			errors[0], additionalInfo)
 	}
 
 	return results, nullMasks, nil
