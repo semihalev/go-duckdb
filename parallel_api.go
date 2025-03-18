@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"runtime"
 	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -51,7 +52,17 @@ func (pe *ParallelExtractor) ProcessInt32Columns(colIndices []int, processor fun
 
 	// Then process the extracted data in parallel
 	var wg sync.WaitGroup
-	errChan := make(chan error, len(colIndices))
+	
+	// Use a buffered channel to avoid goroutine leaks
+	errChan := make(chan error, len(colIndices)+1)
+	
+	// Create a context with cancellation to ensure goroutines can be stopped
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled when we're done
+	
+	// Keep track of the first error
+	var processingErr error
+	var errOnce sync.Once
 
 	for i, colIdx := range colIndices {
 		wg.Add(1)
@@ -62,10 +73,21 @@ func (pe *ParallelExtractor) ProcessInt32Columns(colIndices []int, processor fun
 
 		go func() {
 			defer wg.Done()
+			
+			// Check if we should stop
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// Continue processing
+			}
 
 			// Process the column data
 			if err := processor(localColIdx, columns[localI], nullMasks[localI]); err != nil {
-				errChan <- fmt.Errorf("error processing column %d: %w", localColIdx, err)
+				errOnce.Do(func() {
+					processingErr = fmt.Errorf("error processing column %d: %w", localColIdx, err)
+					cancel() // Signal other goroutines to stop
+				})
 			}
 		}()
 	}
@@ -73,12 +95,9 @@ func (pe *ParallelExtractor) ProcessInt32Columns(colIndices []int, processor fun
 	// Wait for all processing to complete
 	wg.Wait()
 
-	// Check for errors
-	select {
-	case err := <-errChan:
-		return err
-	default:
-		// No errors
+	// Return any error that occurred during processing
+	if processingErr != nil {
+		return processingErr
 	}
 
 	return nil
@@ -108,7 +127,17 @@ func (pe *ParallelExtractor) ProcessInt64Columns(colIndices []int, processor fun
 
 	// Then process the extracted data in parallel
 	var wg sync.WaitGroup
-	errChan := make(chan error, len(colIndices))
+	
+	// Use a buffered channel to avoid goroutine leaks
+	errChan := make(chan error, len(colIndices)+1)
+	
+	// Create a context with cancellation to ensure goroutines can be stopped
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled when we're done
+	
+	// Keep track of the first error
+	var processingErr error
+	var errOnce sync.Once
 
 	for i, colIdx := range colIndices {
 		wg.Add(1)
@@ -119,10 +148,21 @@ func (pe *ParallelExtractor) ProcessInt64Columns(colIndices []int, processor fun
 
 		go func() {
 			defer wg.Done()
+			
+			// Check if we should stop
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// Continue processing
+			}
 
 			// Process the column data
 			if err := processor(localColIdx, columns[localI], nullMasks[localI]); err != nil {
-				errChan <- fmt.Errorf("error processing column %d: %w", localColIdx, err)
+				errOnce.Do(func() {
+					processingErr = fmt.Errorf("error processing column %d: %w", localColIdx, err)
+					cancel() // Signal other goroutines to stop
+				})
 			}
 		}()
 	}
@@ -130,12 +170,9 @@ func (pe *ParallelExtractor) ProcessInt64Columns(colIndices []int, processor fun
 	// Wait for all processing to complete
 	wg.Wait()
 
-	// Check for errors
-	select {
-	case err := <-errChan:
-		return err
-	default:
-		// No errors
+	// Return any error that occurred during processing
+	if processingErr != nil {
+		return processingErr
 	}
 
 	return nil
@@ -165,7 +202,17 @@ func (pe *ParallelExtractor) ProcessFloat64Columns(colIndices []int, processor f
 
 	// Then process the extracted data in parallel
 	var wg sync.WaitGroup
-	errChan := make(chan error, len(colIndices))
+	
+	// Use a buffered channel to avoid goroutine leaks
+	errChan := make(chan error, len(colIndices)+1)
+	
+	// Create a context with cancellation to ensure goroutines can be stopped
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled when we're done
+	
+	// Keep track of the first error
+	var processingErr error
+	var errOnce sync.Once
 
 	for i, colIdx := range colIndices {
 		wg.Add(1)
@@ -176,10 +223,21 @@ func (pe *ParallelExtractor) ProcessFloat64Columns(colIndices []int, processor f
 
 		go func() {
 			defer wg.Done()
+			
+			// Check if we should stop
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// Continue processing
+			}
 
 			// Process the column data
 			if err := processor(localColIdx, columns[localI], nullMasks[localI]); err != nil {
-				errChan <- fmt.Errorf("error processing column %d: %w", localColIdx, err)
+				errOnce.Do(func() {
+					processingErr = fmt.Errorf("error processing column %d: %w", localColIdx, err)
+					cancel() // Signal other goroutines to stop
+				})
 			}
 		}()
 	}
@@ -187,12 +245,9 @@ func (pe *ParallelExtractor) ProcessFloat64Columns(colIndices []int, processor f
 	// Wait for all processing to complete
 	wg.Wait()
 
-	// Check for errors
-	select {
-	case err := <-errChan:
-		return err
-	default:
-		// No errors
+	// Return any error that occurred during processing
+	if processingErr != nil {
+		return processingErr
 	}
 
 	return nil
@@ -226,7 +281,17 @@ func (pe *ParallelExtractor) ProcessParallel(
 
 	// Then process the extracted data in parallel
 	var wg sync.WaitGroup
-	errChan := make(chan error, len(colIndices))
+	
+	// Use a buffered channel to avoid goroutine leaks
+	errChan := make(chan error, len(colIndices)+1)
+	
+	// Create a context with cancellation to ensure goroutines can be stopped
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure context is cancelled when we're done
+	
+	// Keep track of the first error
+	var processingErr error
+	var errOnce sync.Once
 
 	for i, colIdx := range colIndices {
 		wg.Add(1)
@@ -237,10 +302,21 @@ func (pe *ParallelExtractor) ProcessParallel(
 
 		go func() {
 			defer wg.Done()
+			
+			// Check if we should stop
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// Continue processing
+			}
 
-			// Process the column data
+			// Process the column data with proper error handling
 			if err := processFn(localColIdx, values[localI], nullMasks[localI]); err != nil {
-				errChan <- fmt.Errorf("error processing column %d: %w", localColIdx, err)
+				errOnce.Do(func() {
+					processingErr = fmt.Errorf("error processing column %d: %w", localColIdx, err)
+					cancel() // Signal other goroutines to stop
+				})
 			}
 		}()
 	}
@@ -248,12 +324,9 @@ func (pe *ParallelExtractor) ProcessParallel(
 	// Wait for all processing to complete
 	wg.Wait()
 
-	// Check for errors
-	select {
-	case err := <-errChan:
-		return err
-	default:
-		// No errors
+	// Return any error that occurred during processing
+	if processingErr != nil {
+		return processingErr
 	}
 
 	return nil
@@ -542,15 +615,34 @@ func (pe *ParallelExtractor) ProcessChunked(
 	sem := make(chan struct{}, maxParallel)
 
 	var wg sync.WaitGroup
-	errChan := make(chan error, numChunks)
-
+	
+	// Buffered error channel to prevent goroutine leaks
+	// Use numChunks + 1 to ensure we never block when writing errors
+	errChan := make(chan error, numChunks+1)
+	
 	// Create a safe way to terminate early if an error occurs
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Use a parent context with timeout to prevent any possibility of leaked goroutines
+	parentCtx, parentCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithCancel(parentCtx)
+	
+	// Always clean up contexts when we're done
+	defer func() {
+		cancel()
+		parentCancel()
+		
+		// Drain error channel to prevent goroutine leaks
+		for len(errChan) > 0 {
+			<-errChan
+		}
+	}()
 
 	// Create a mutex to protect shared data
 	var processMu sync.Mutex
 	processedCount := 0
+
+	// Ensure we track any errors that occur
+	var processingErr error
+	var errOnce sync.Once
 
 	for chunkIdx := 0; chunkIdx < numChunks; chunkIdx++ {
 		wg.Add(1)
@@ -559,15 +651,20 @@ func (pe *ParallelExtractor) ProcessChunked(
 		localChunkIdx := chunkIdx
 
 		go func() {
+			// Use defer for cleanup to ensure it happens even in case of panic
+			defer wg.Done()
+			
 			// Acquire semaphore slot
-			sem <- struct{}{}
-			defer func() {
-				// Release semaphore slot, even if we panic
-				<-sem
-				wg.Done()
-			}()
+			select {
+			case sem <- struct{}{}:
+				// Successfully acquired semaphore
+				defer func() { <-sem }() // Always release semaphore
+			case <-ctx.Done():
+				// Context was cancelled, exit early
+				return
+			}
 
-			// Check if we've been cancelled
+			// Check if we've been cancelled before doing any work
 			select {
 			case <-ctx.Done():
 				// Another goroutine encountered an error, stop processing
@@ -579,8 +676,12 @@ func (pe *ParallelExtractor) ProcessChunked(
 			// Catch any panics to avoid crashing the whole program
 			defer func() {
 				if r := recover(); r != nil {
-					errChan <- fmt.Errorf("panic in chunk %d: %v", localChunkIdx, r)
-					cancel() // Signal other goroutines to stop
+					// Record the first error only
+					errOnce.Do(func() {
+						processingErr = fmt.Errorf("panic in chunk %d: %v", localChunkIdx, r)
+						// Signal other goroutines to stop
+						cancel()
+					})
 				}
 			}()
 
@@ -618,17 +719,22 @@ func (pe *ParallelExtractor) ProcessChunked(
 
 				values, nulls, err := pe.extractChunk(colIdx, startRow, endRow)
 				if err != nil {
-					errChan <- fmt.Errorf("failed to extract chunk %d, column %d: %w",
-						localChunkIdx, colIdx, err)
-					cancel() // Signal other goroutines to stop
+					// Record the first error only
+					errOnce.Do(func() {
+						processingErr = fmt.Errorf("failed to extract chunk %d, column %d: %w",
+							localChunkIdx, colIdx, err)
+						cancel() // Signal other goroutines to stop
+					})
 					return
 				}
 
 				// Verify the extracted data is valid
 				if values == nil || nulls == nil {
-					errChan <- fmt.Errorf("nil values or nulls for chunk %d, column %d",
-						localChunkIdx, colIdx)
-					cancel()
+					errOnce.Do(func() {
+						processingErr = fmt.Errorf("nil values or nulls for chunk %d, column %d",
+							localChunkIdx, colIdx)
+						cancel()
+					})
 					return
 				}
 
@@ -643,8 +749,10 @@ func (pe *ParallelExtractor) ProcessChunked(
 
 			// Process the chunk
 			if err := processor(localChunkIdx, colData, nullMasks); err != nil {
-				errChan <- fmt.Errorf("error processing chunk %d: %w", localChunkIdx, err)
-				cancel() // Signal other goroutines to stop
+				errOnce.Do(func() {
+					processingErr = fmt.Errorf("error processing chunk %d: %w", localChunkIdx, err)
+					cancel() // Signal other goroutines to stop
+				})
 			}
 		}()
 	}
@@ -652,12 +760,9 @@ func (pe *ParallelExtractor) ProcessChunked(
 	// Wait for all chunks to be processed
 	wg.Wait()
 
-	// Check for errors
-	select {
-	case err := <-errChan:
-		return err
-	default:
-		// No errors
+	// Return any error that occurred during processing
+	if processingErr != nil {
+		return processingErr
 	}
 
 	return nil

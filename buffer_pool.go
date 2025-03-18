@@ -68,6 +68,11 @@ func (p *BufferPool) GetBuffer() *C.result_buffer_t {
 	// Get buffer from pool
 	buffer := p.buffers.Get().(*C.result_buffer_t)
 
+	// Lock while modifying the buffer to prevent race conditions
+	// This ensures thread safety when cleaning and initializing buffers
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	// Ensure clean state
 	if buffer.ref_count != 0 || buffer.error_code != 0 || buffer.resource_count != 0 {
 		// If the buffer is in an unexpected state, discard it and get a fresh one
@@ -137,6 +142,26 @@ func (p *BufferPool) Stats() map[string]uint64 {
 		"misses":   atomic.LoadUint64(&p.misses),
 		"discards": atomic.LoadUint64(&p.discards),
 	}
+}
+
+// TestGetBuffer is used for testing - it gets a buffer but doesn't touch the mutex
+// This is only used for testing mutex behavior and should not be called in production code
+func (p *BufferPool) TestGetBuffer() *C.result_buffer_t {
+	atomic.AddUint64(&p.gets, 1)
+	
+	// Get buffer from pool without any mutex protection for testing race conditions
+	buffer := p.buffers.Get().(*C.result_buffer_t)
+
+	// Ensure clean state
+	if buffer.ref_count != 0 || buffer.error_code != 0 || buffer.resource_count != 0 {
+		C.free_result_buffer(buffer)
+		C.memset(unsafe.Pointer(buffer), 0, C.sizeof_result_buffer_t)
+	}
+
+	// Initialize with ref_count of 1
+	buffer.ref_count = 1
+
+	return buffer
 }
 
 // Global buffer pool for shared use
