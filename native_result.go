@@ -12,7 +12,6 @@ package duckdb
 import "C"
 import (
 	"fmt"
-	"reflect"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -113,14 +112,9 @@ func (st *StringTable) GetOrCreateString(ptr unsafe.Pointer, length int) string 
 
 	// Create a new string using unsafe to avoid copy
 	// This directly references the memory in DuckDB
-	var s string
-	// Create a string header that points to the C memory
+	// Using unsafe.String (Go 1.20+) or equivalent approach for zero-copy string creation
 	// This is the key to zero-copy: we're sharing memory between C and Go
-	stringHeader := &reflect.StringHeader{
-		Data: uintptr(ptr),
-		Len:  length,
-	}
-	s = *(*string)(unsafe.Pointer(stringHeader))
+	s := unsafe.String((*byte)(ptr), length)
 
 	// Store in the maps while holding the lock
 	st.strings.Store(key, s)
@@ -1806,15 +1800,23 @@ func (dr *DirectResult) ExtractBoolColumn(colIdx int) ([]bool, []bool, error) {
 	nulls := make([]bool, rowCount)
 
 	// Get pointers to Go slices for C to write directly into
-	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
-	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+	// Using safer approach with unsafe.Pointer instead of reflect.SliceHeader for Go 1.17+ compatibility
+	var valuesPtr unsafe.Pointer
+	var nullsPtr unsafe.Pointer
+
+	if len(values) > 0 {
+		valuesPtr = unsafe.Pointer(&values[0])
+	}
+	if len(nulls) > 0 {
+		nullsPtr = unsafe.Pointer(&nulls[0])
+	}
 
 	// Call optimized C function
 	C.extract_bool_column(
 		dr.result,
 		C.idx_t(colIdx),
-		(*C.bool)(unsafe.Pointer(valuesPtr)),
-		(*C.bool)(unsafe.Pointer(nullsPtr)),
+		(*C.bool)(valuesPtr),
+		(*C.bool)(nullsPtr),
 		C.idx_t(0),
 		C.idx_t(rowCount),
 	)
@@ -1847,15 +1849,23 @@ func (dr *DirectResult) ExtractTimestampColumn(colIdx int) ([]int64, []bool, err
 	nulls := make([]bool, rowCount)
 
 	// Get pointers to Go slices
-	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
-	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+	// Using safer approach with unsafe.Pointer instead of reflect.SliceHeader for Go 1.17+ compatibility
+	var valuesPtr unsafe.Pointer
+	var nullsPtr unsafe.Pointer
+
+	if len(values) > 0 {
+		valuesPtr = unsafe.Pointer(&values[0])
+	}
+	if len(nulls) > 0 {
+		nullsPtr = unsafe.Pointer(&nulls[0])
+	}
 
 	// Call optimized C function
 	C.extract_timestamp_column(
 		dr.result,
 		C.idx_t(colIdx),
-		(*C.int64_t)(unsafe.Pointer(valuesPtr)),
-		(*C.bool)(unsafe.Pointer(nullsPtr)),
+		(*C.int64_t)(valuesPtr),
+		(*C.bool)(nullsPtr),
 		C.idx_t(0),
 		C.idx_t(rowCount),
 	)
@@ -1888,15 +1898,23 @@ func (dr *DirectResult) ExtractDateColumn(colIdx int) ([]int32, []bool, error) {
 	nulls := make([]bool, rowCount)
 
 	// Get pointers to Go slices
-	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
-	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+	// Using safer approach with unsafe.Pointer instead of reflect.SliceHeader for Go 1.17+ compatibility
+	var valuesPtr unsafe.Pointer
+	var nullsPtr unsafe.Pointer
+
+	if len(values) > 0 {
+		valuesPtr = unsafe.Pointer(&values[0])
+	}
+	if len(nulls) > 0 {
+		nullsPtr = unsafe.Pointer(&nulls[0])
+	}
 
 	// Call optimized C function
 	C.extract_date_column(
 		dr.result,
 		C.idx_t(colIdx),
-		(*C.int32_t)(unsafe.Pointer(valuesPtr)),
-		(*C.bool)(unsafe.Pointer(nullsPtr)),
+		(*C.int32_t)(valuesPtr),
+		(*C.bool)(nullsPtr),
 		C.idx_t(0),
 		C.idx_t(rowCount),
 	)
