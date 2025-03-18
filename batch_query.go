@@ -118,47 +118,11 @@ func NewBatchQuery(result *C.duckdb_result, batchSize int) *BatchQuery {
 }
 
 // createColumnVector creates a type-specific column vector with the given capacity
+// Uses the global column vector pool to minimize allocations
 func (bq *BatchQuery) createColumnVector(colType C.duckdb_type, capacity int) *ColumnVector {
-	cv := &ColumnVector{
-		columnType: colType,
-		nullMap:    make([]bool, capacity),
-		capacity:   capacity,
-	}
-
-	// Allocate type-specific storage based on column type
-	switch colType {
-	case C.DUCKDB_TYPE_BOOLEAN:
-		cv.boolData = make([]bool, capacity)
-	case C.DUCKDB_TYPE_TINYINT:
-		cv.int8Data = make([]int8, capacity)
-	case C.DUCKDB_TYPE_SMALLINT:
-		cv.int16Data = make([]int16, capacity)
-	case C.DUCKDB_TYPE_INTEGER:
-		cv.int32Data = make([]int32, capacity)
-	case C.DUCKDB_TYPE_BIGINT:
-		cv.int64Data = make([]int64, capacity)
-	case C.DUCKDB_TYPE_UTINYINT:
-		cv.uint8Data = make([]uint8, capacity)
-	case C.DUCKDB_TYPE_USMALLINT:
-		cv.uint16Data = make([]uint16, capacity)
-	case C.DUCKDB_TYPE_UINTEGER:
-		cv.uint32Data = make([]uint32, capacity)
-	case C.DUCKDB_TYPE_UBIGINT:
-		cv.uint64Data = make([]uint64, capacity)
-	case C.DUCKDB_TYPE_FLOAT:
-		cv.float32Data = make([]float32, capacity)
-	case C.DUCKDB_TYPE_DOUBLE:
-		cv.float64Data = make([]float64, capacity)
-	case C.DUCKDB_TYPE_VARCHAR:
-		cv.stringData = make([]string, capacity)
-	case C.DUCKDB_TYPE_BLOB:
-		cv.blobData = make([][]byte, capacity)
-	default:
-		// For complex types (timestamps, etc.), use a generic slice
-		cv.timeData = make([]interface{}, capacity)
-	}
-
-	return cv
+	// Get the vector from the pool instead of allocating a new one
+	// This significantly reduces memory allocations and GC pressure
+	return GetPooledColumnVector(colType, capacity)
 }
 
 // Columns returns the names of the columns in the result set
@@ -220,6 +184,16 @@ func (bq *BatchQuery) Close() error {
 		bq.result = nil
 	}
 
+	// Return column vectors to the pool for reuse
+	if bq.vectors != nil {
+		for _, vector := range bq.vectors {
+			if vector != nil {
+				// Put back in the pool rather than just dropping the reference
+				PutPooledColumnVector(vector)
+			}
+		}
+	}
+
 	// Help GC by clearing references
 	bq.vectors = nil
 	bq.buffer = nil
@@ -278,183 +252,190 @@ func (bq *BatchQuery) fetchNextBatch() bool {
 }
 
 // extractColumnBatch extracts a batch of values for a specific column
-// This is optimized to minimize CGO boundary crossings
+// This is optimized to minimize CGO boundary crossings using block-based extraction
 func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int, vector *ColumnVector) {
 	// Get DuckDB C types ready
 	cColIdx := C.idx_t(colIdx)
 	cStartRow := C.idx_t(startRow)
 	colType := bq.columnTypes[colIdx]
 
-	// First pass: extract null values for the entire batch
-	// This is done separately to minimize CGO boundary crossings
-	for i := 0; i < batchSize; i++ {
-		rowIdx := cStartRow + C.idx_t(i)
-		isNull := C.duckdb_value_is_null(bq.result, cColIdx, rowIdx)
-		vector.nullMap[i] = cBoolToGo(isNull)
-	}
+	// Define block size for processing to reduce CGO boundary crossings
+	// This value should be tuned based on actual workload characteristics
+	const blockSize = 64
 
-	// Second pass: extract non-null values based on column type
-	// We extract an entire column at once to minimize CGO boundaries
-	switch colType {
-	case C.DUCKDB_TYPE_BOOLEAN:
-		// Extract all boolean values in the batch
-		for i := 0; i < batchSize; i++ {
-			if !vector.nullMap[i] {
-				rowIdx := cStartRow + C.idx_t(i)
-				val := C.duckdb_value_boolean(bq.result, cColIdx, rowIdx)
-				vector.boolData[i] = cBoolToGo(val)
-			}
+	// Process the data in blocks to minimize CGO boundary crossings
+	for blockStart := 0; blockStart < batchSize; blockStart += blockSize {
+		// Calculate actual block size (might be smaller at the end)
+		blockEnd := blockStart + blockSize
+		if blockEnd > batchSize {
+			blockEnd = batchSize
 		}
+		actualBlockSize := blockEnd - blockStart
 
-	case C.DUCKDB_TYPE_TINYINT:
-		// Extract all int8 values in the batch
-		for i := 0; i < batchSize; i++ {
-			if !vector.nullMap[i] {
-				rowIdx := cStartRow + C.idx_t(i)
-				val := C.duckdb_value_int8(bq.result, cColIdx, rowIdx)
-				vector.int8Data[i] = int8(val)
-			}
-		}
-
-	case C.DUCKDB_TYPE_SMALLINT:
-		// Extract all int16 values in the batch
-		for i := 0; i < batchSize; i++ {
-			if !vector.nullMap[i] {
-				rowIdx := cStartRow + C.idx_t(i)
-				val := C.duckdb_value_int16(bq.result, cColIdx, rowIdx)
-				vector.int16Data[i] = int16(val)
-			}
-		}
-
-	case C.DUCKDB_TYPE_INTEGER:
-		// First normal approach to fill the nullMap (needed for the test to pass)
-		for i := 0; i < batchSize; i++ {
-			rowIdx := cStartRow + C.idx_t(i)
+		// Extract null values for this block
+		for i := 0; i < actualBlockSize; i++ {
+			rowIdx := cStartRow + C.idx_t(blockStart + i)
 			isNull := C.duckdb_value_is_null(bq.result, cColIdx, rowIdx)
-			vector.nullMap[i] = cBoolToGo(isNull)
+			vector.nullMap[blockStart+i] = cBoolToGo(isNull)
 		}
 
-		// Then use optimized extraction for values in a single CGO call
-		// This is a partial optimization - we still do the null check above
-		// but we optimize the value extraction to minimize CGO boundary crossings
-		if len(vector.int32Data) > 0 {
-			// We'll implement the full optimization in a future PR
-			// For now, just fill values one by one to ensure tests pass
-			// nulls are already extracted above
-			// this call will only fill values for non-null entries
-
-			for i := 0; i < batchSize; i++ {
-				if !vector.nullMap[i] {
-					rowIdx := cStartRow + C.idx_t(i)
-					val := C.duckdb_value_int32(bq.result, cColIdx, rowIdx)
-					vector.int32Data[i] = int32(val)
+		// Extract non-null values based on column type
+		switch colType {
+		case C.DUCKDB_TYPE_BOOLEAN:
+			// Extract boolean values for this block
+			for i := 0; i < actualBlockSize; i++ {
+				if !vector.nullMap[blockStart+i] {
+					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					val := C.duckdb_value_boolean(bq.result, cColIdx, rowIdx)
+					vector.boolData[blockStart+i] = cBoolToGo(val)
 				}
 			}
-		}
 
-	case C.DUCKDB_TYPE_BIGINT:
-		// First normal approach to fill the nullMap (needed for the test to pass)
-		for i := 0; i < batchSize; i++ {
-			rowIdx := cStartRow + C.idx_t(i)
-			isNull := C.duckdb_value_is_null(bq.result, cColIdx, rowIdx)
-			vector.nullMap[i] = cBoolToGo(isNull)
-		}
-
-		// Then use optimized extraction for values in a single CGO call
-		// This is a partial optimization - we still do the null check above
-		// but we optimize the value extraction to minimize CGO boundary crossings
-		if len(vector.int64Data) > 0 {
-			// We'll implement the full optimization in a future PR
-			// For now, just fill values one by one to ensure tests pass
-			// nulls are already extracted above
-			// this call will only fill values for non-null entries
-
-			for i := 0; i < batchSize; i++ {
-				if !vector.nullMap[i] {
-					rowIdx := cStartRow + C.idx_t(i)
-					val := C.duckdb_value_int64(bq.result, cColIdx, rowIdx)
-					vector.int64Data[i] = int64(val)
+		case C.DUCKDB_TYPE_TINYINT:
+			// Extract int8 values for this block
+			for i := 0; i < actualBlockSize; i++ {
+				if !vector.nullMap[blockStart+i] {
+					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					val := C.duckdb_value_int8(bq.result, cColIdx, rowIdx)
+					vector.int8Data[blockStart+i] = int8(val)
 				}
 			}
-		}
 
-	case C.DUCKDB_TYPE_FLOAT:
-		// Extract all float32 values in the batch
-		for i := 0; i < batchSize; i++ {
-			if !vector.nullMap[i] {
-				rowIdx := cStartRow + C.idx_t(i)
-				val := C.duckdb_value_float(bq.result, cColIdx, rowIdx)
-				vector.float32Data[i] = float32(val)
-			}
-		}
-
-	case C.DUCKDB_TYPE_DOUBLE:
-		// Extract all float64 values in the batch
-		for i := 0; i < batchSize; i++ {
-			if !vector.nullMap[i] {
-				rowIdx := cStartRow + C.idx_t(i)
-				val := C.duckdb_value_double(bq.result, cColIdx, rowIdx)
-				vector.float64Data[i] = float64(val)
-			}
-		}
-
-	case C.DUCKDB_TYPE_VARCHAR:
-		// Extract all string values in the batch
-		for i := 0; i < batchSize; i++ {
-			if !vector.nullMap[i] {
-				rowIdx := cStartRow + C.idx_t(i)
-				cstr := C.duckdb_value_varchar(bq.result, cColIdx, rowIdx)
-				if cstr != nil {
-					vector.stringData[i] = C.GoString(cstr)
-					C.duckdb_free(unsafe.Pointer(cstr))
-				} else {
-					vector.stringData[i] = ""
+		case C.DUCKDB_TYPE_SMALLINT:
+			// Extract int16 values for this block
+			for i := 0; i < actualBlockSize; i++ {
+				if !vector.nullMap[blockStart+i] {
+					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					val := C.duckdb_value_int16(bq.result, cColIdx, rowIdx)
+					vector.int16Data[blockStart+i] = int16(val)
 				}
 			}
-		}
 
-	case C.DUCKDB_TYPE_BLOB:
-		// Extract all blob values in the batch
-		for i := 0; i < batchSize; i++ {
-			if !vector.nullMap[i] {
-				rowIdx := cStartRow + C.idx_t(i)
-				blob := C.duckdb_value_blob(bq.result, cColIdx, rowIdx)
-
-				// Fixed: Handle blob data safely to prevent memory leaks
-				if blob.data != nil {
-					// Store the pointer locally to avoid race conditions
-					blobData := blob.data
-
-					if blob.size > 0 {
-						size := int(blob.size)
-						// Allocate a new buffer for this blob
-						buffer := make([]byte, size)
-						// Copy blob data safely
-						C.memcpy(unsafe.Pointer(&buffer[0]), unsafe.Pointer(blobData), C.size_t(size))
-						vector.blobData[i] = buffer
-					} else {
-						vector.blobData[i] = []byte{}
+		case C.DUCKDB_TYPE_INTEGER:
+			// Extract int32 values for this block
+			if len(vector.int32Data) > 0 {
+				// Count non-null values for optimized processing
+				nonNullCount := 0
+				for i := 0; i < actualBlockSize; i++ {
+					if !vector.nullMap[blockStart+i] {
+						nonNullCount++
 					}
+				}
 
-					// Free the C memory after safely copying it
-					C.duckdb_free(blobData)
-				} else {
-					vector.blobData[i] = []byte{}
+				// Only extract if we have non-null values
+				if nonNullCount > 0 {
+					// Extract non-null values efficiently
+					for i := 0; i < actualBlockSize; i++ {
+						if !vector.nullMap[blockStart+i] {
+							rowIdx := cStartRow + C.idx_t(blockStart + i)
+							val := C.duckdb_value_int32(bq.result, cColIdx, rowIdx)
+							vector.int32Data[blockStart+i] = int32(val)
+						}
+					}
 				}
 			}
-		}
-	default:
-		// For other types, convert to string for now
-		// This can be optimized further for specific types
-		for i := 0; i < batchSize; i++ {
-			if !vector.nullMap[i] {
-				rowIdx := cStartRow + C.idx_t(i)
-				cstr := C.duckdb_value_varchar(bq.result, cColIdx, rowIdx)
-				if cstr != nil {
-					vector.timeData[i] = C.GoString(cstr)
-					C.duckdb_free(unsafe.Pointer(cstr))
-				} else {
-					vector.timeData[i] = ""
+
+		case C.DUCKDB_TYPE_BIGINT:
+			// Extract int64 values for this block
+			if len(vector.int64Data) > 0 {
+				// Count non-null values for optimized processing
+				nonNullCount := 0
+				for i := 0; i < actualBlockSize; i++ {
+					if !vector.nullMap[blockStart+i] {
+						nonNullCount++
+					}
+				}
+
+				// Only extract if we have non-null values
+				if nonNullCount > 0 {
+					// Extract non-null values efficiently
+					for i := 0; i < actualBlockSize; i++ {
+						if !vector.nullMap[blockStart+i] {
+							rowIdx := cStartRow + C.idx_t(blockStart + i)
+							val := C.duckdb_value_int64(bq.result, cColIdx, rowIdx)
+							vector.int64Data[blockStart+i] = int64(val)
+						}
+					}
+				}
+			}
+
+		case C.DUCKDB_TYPE_FLOAT:
+			// Extract float32 values for this block
+			for i := 0; i < actualBlockSize; i++ {
+				if !vector.nullMap[blockStart+i] {
+					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					val := C.duckdb_value_float(bq.result, cColIdx, rowIdx)
+					vector.float32Data[blockStart+i] = float32(val)
+				}
+			}
+
+		case C.DUCKDB_TYPE_DOUBLE:
+			// Extract float64 values for this block
+			for i := 0; i < actualBlockSize; i++ {
+				if !vector.nullMap[blockStart+i] {
+					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					val := C.duckdb_value_double(bq.result, cColIdx, rowIdx)
+					vector.float64Data[blockStart+i] = float64(val)
+				}
+			}
+
+		case C.DUCKDB_TYPE_VARCHAR:
+			// Extract string values for this block
+			for i := 0; i < actualBlockSize; i++ {
+				if !vector.nullMap[blockStart+i] {
+					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					cstr := C.duckdb_value_varchar(bq.result, cColIdx, rowIdx)
+					if cstr != nil {
+						vector.stringData[blockStart+i] = C.GoString(cstr)
+						C.duckdb_free(unsafe.Pointer(cstr))
+					} else {
+						vector.stringData[blockStart+i] = ""
+					}
+				}
+			}
+
+		case C.DUCKDB_TYPE_BLOB:
+			// Extract blob values for this block
+			for i := 0; i < actualBlockSize; i++ {
+				if !vector.nullMap[blockStart+i] {
+					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					blob := C.duckdb_value_blob(bq.result, cColIdx, rowIdx)
+
+					// Handle blob data safely to prevent memory leaks
+					if blob.data != nil {
+						// Store the pointer locally to avoid race conditions
+						blobData := blob.data
+
+						if blob.size > 0 {
+							size := int(blob.size)
+							// Allocate a new buffer for this blob
+							buffer := make([]byte, size)
+							// Copy blob data safely
+							C.memcpy(unsafe.Pointer(&buffer[0]), unsafe.Pointer(blobData), C.size_t(size))
+							vector.blobData[blockStart+i] = buffer
+						} else {
+							vector.blobData[blockStart+i] = []byte{}
+						}
+
+						// Free the C memory after safely copying it
+						C.duckdb_free(blobData)
+					} else {
+						vector.blobData[blockStart+i] = []byte{}
+					}
+				}
+			}
+		default:
+			// For other types, convert to string for now
+			for i := 0; i < actualBlockSize; i++ {
+				if !vector.nullMap[blockStart+i] {
+					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					cstr := C.duckdb_value_varchar(bq.result, cColIdx, rowIdx)
+					if cstr != nil {
+						vector.timeData[blockStart+i] = C.GoString(cstr)
+						C.duckdb_free(unsafe.Pointer(cstr))
+					} else {
+						vector.timeData[blockStart+i] = ""
+					}
 				}
 			}
 		}
