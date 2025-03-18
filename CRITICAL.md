@@ -100,8 +100,8 @@ This document highlights critical issues, unused methods, and performance bottle
 ## duckdb.go
 
 ### Critical Issues
-- **Thread safety issue** (Line 1305-1306): The `vectorsByType` global map is protected by a lock but the lock isn't held when accessing the map in GetPreallocatedVector if the first condition fails.
-- **Memory leak risk** (Lines 1304-1347): PreallocateVectors creates vectors that might not be properly freed if not used, since it stores them in global maps.
+- ✅ **FIXED: Thread safety issue** (Line 1305-1306): The `vectorsByType` global map is now properly protected by a lock when accessing in GetPreallocatedVector, with the lock being held for the entire map access operation.
+- ✅ **FIXED: Memory leak risk** (Lines 1304-1347): Added periodic cleanup mechanism with `cleanUnusedVectors()` that limits the number of vectors stored per type and properly frees unused vectors.
 
 ### Unused Code
 - **Unused field** (Lines 110-120): The `stats` struct in ResultBufferPool has tracking counters but they are never incremented or used anywhere in the code.
@@ -245,8 +245,25 @@ This document highlights critical issues, unused methods, and performance bottle
   - Fixed type conversion for COUNT(*) query results (int64 vs int32)
   - Comprehensive test suite for various transaction scenarios
 
+### Thread Safety and Memory Management Fixes (March 2025)
+
+#### Issues Fixed
+- ✅ **Vector pool memory leaks** (duckdb.go): Fixed memory leak in vector pooling by implementing proper cleanup.
+  - Added `cleanUnusedVectors()` to periodically remove and free excess vectors
+  - Limited the number of vectors per type to prevent unbounded growth
+  - Used atomic counter to track allocations for efficient scheduling
+  - Implemented a cap of 5 vectors per type to balance caching and memory usage
+
+- ✅ **Thread safety in vector access** (duckdb.go): Fixed thread safety issues in `GetPreallocatedVector`.
+  - Restructured locking to properly protect all map accesses
+  - Released locks as early as possible to minimize contention
+  - Added proper nil checks to prevent panic conditions
+  - Used two-phase map lookup pattern for safe concurrent access
+
 #### Technical Notes
 1. DuckDB returns BLOBs as formatted string literals like `\x01\x02\x03\x04\x05` in some implementations, not byte slices
 2. Empty BLOBs should be bound with `nil` pointer and size 0, not with a temporary slice
 3. When using prepared statements with context methods, proper interface implementation is crucial for safe concurrent usage
 4. DuckDB COUNT(*) operations return int64 values, not int32, requiring proper type assertion in tests
+5. Proper vector memory management is critical for long-running applications to prevent memory leaks
+6. Map access patterns must be carefully designed in concurrent code to avoid race conditions

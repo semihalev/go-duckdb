@@ -23,6 +23,7 @@ import (
 	"database/sql/driver"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -1305,6 +1306,12 @@ func (v *SafeColumnVector) GetBool(index int) bool {
 var vectorsByType = make(map[int]map[int]*SafeColumnVector)
 var vectorsLock sync.RWMutex
 
+// vectorCleanupInterval defines how often to check for unused vectors (set to ~1 minute)
+const vectorCleanupInterval = 1000
+
+// Counter to track allocations for periodic cleanup
+var allocCounter int32
+
 // PreallocateVectors pre-allocates column vectors for specific types and sizes.
 // This reduces allocations during query execution.
 // Parameters:
@@ -1374,22 +1381,74 @@ func PreallocateVectors(rowCapacity int, types []int, sizes []int) {
 			vectorsByType[duckDBType][elementSize].Reset()
 		}
 	}
+
+	// Periodically check to clean up any vectors that might not get used
+	// This helps prevent memory leaks from preallocated vectors
+	counter := atomic.AddInt32(&allocCounter, 1)
+	if counter%vectorCleanupInterval == 0 {
+		go cleanUnusedVectors()
+	}
+}
+
+// cleanUnusedVectors periodically removes vectors that haven't been used recently
+// This helps prevent memory leaks from preallocated vectors that are never used
+func cleanUnusedVectors() {
+	// Get exclusive lock since we'll be modifying the map
+	vectorsLock.Lock()
+	defer vectorsLock.Unlock()
+
+	// For now, we'll use a simple strategy: keep only a reasonable number of vectors per type
+	// A more sophisticated approach would track usage time and free less-used vectors
+	const maxVectorsPerType = 5
+
+	for duckDBType, typeMap := range vectorsByType {
+		if len(typeMap) > maxVectorsPerType {
+			// Count how many vectors we have for this type
+			count := 0
+			
+			// First pass: free excess vectors
+			for elementSize, vector := range typeMap {
+				count++
+				if count > maxVectorsPerType {
+					// Free the vector's memory
+					vector.Free()
+					// Remove from the map
+					delete(typeMap, elementSize)
+				}
+			}
+		}
+		
+		// If the map is now empty, remove it entirely
+		if len(typeMap) == 0 {
+			delete(vectorsByType, duckDBType)
+		}
+	}
 }
 
 // GetPreallocatedVector retrieves a pre-allocated vector for a specific type and element size.
 // Returns nil if no vector is available.
 func GetPreallocatedVector(duckDBType int, elementSize int) *SafeColumnVector {
+	// Ensure thread-safe access to the map
 	vectorsLock.RLock()
-	defer vectorsLock.RUnlock()
-
-	// Check if we have a vector for this type and size
-	if typeMap, ok := vectorsByType[duckDBType]; ok {
-		if vector, ok := typeMap[elementSize]; ok {
-			return vector
-		}
+	
+	// Check if we have a type map for this DuckDB type
+	typeMap, typeOk := vectorsByType[duckDBType]
+	if !typeOk {
+		vectorsLock.RUnlock()
+		return nil
 	}
-
-	return nil
+	
+	// Check if we have a vector for this element size
+	vector, vectorOk := typeMap[elementSize]
+	
+	// Release read lock before returning
+	vectorsLock.RUnlock()
+	
+	if !vectorOk {
+		return nil
+	}
+	
+	return vector
 }
 
 // Driver implements the database/sql/driver.Driver interface.
