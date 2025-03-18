@@ -57,12 +57,12 @@ This document highlights critical issues, unused methods, and performance bottle
 ### Performance Issues
 - ✅ **IMPROVED: Excessive memory allocation** (Lines 261-263): Added proper bounds and nil checks to avoid unnecessary allocations and potential index out of bounds panics.
 - ✅ **IMPROVED: Thread safety in Next()** (Lines 487-512): Added proper locking and safe copy semantics to prevent race conditions during concurrent access.
-- **Excessive CGO boundary crossing** (Lines 268-274): Despite comments about minimizing CGO boundary crossings, the code still crosses the CGO boundary for each row in a batch when checking for nulls.
+- ✅ **IMPROVED: Excessive CGO boundary crossing** (Lines 268-274): Implemented block-based extraction that processes data in blocks of 64 rows at a time, reducing CGO calls by ~64x.
 - **Duplicate code** (Lines 749-780, 783-814): Nearly identical code for Exec and ExecContext with minimal differences.
 - **String conversion overhead** (Lines 385-399): All unsupported types are converted to string through C.GoString which is inefficient, especially for time-related types.
-- **Inefficient memory management** (Lines 366-383): For each non-null BLOB value, a new slice is allocated, which could lead to excessive GC pressure.
+- ✅ **IMPROVED: Inefficient memory management** (Lines 366-383): Implemented comprehensive ColumnVectorPool to reuse vectors and slices, significantly reducing GC pressure.
 - **Fixed batch size** (Line 22): The batch size is fixed at creation time rather than being dynamically adjusted based on query characteristics or memory pressure.
-- **Missing vectorized processing**: Despite column-wise storage, the extraction process still iterates row by row (e.g., lines 279-287) instead of true vectorized processing.
+- ✅ **IMPROVED: Missing vectorized processing**: Implemented block-based extraction that processes data in chunks, reducing per-row iteration overhead by ~64x in typical batches.
 
 ## native_result.go
 
@@ -217,15 +217,15 @@ This document highlights critical issues, unused methods, and performance bottle
 
 ✅ 1. **Fix race conditions** in buffer_pool.go, batch_query.go, and string_cache.go which could cause crashes or memory corruption.
 ✅ 2. **Address resource leaks** in connection handling and result processing (fixed in parallel_api.go, batch_query.go, connection.go, and statement.go).
-🔄 3. **Optimize CGO boundary crossings** which are significant performance bottlenecks (preparation work done in batch_query.go, full optimization in progress).
+✅ 3. **Optimize CGO boundary crossings** which are significant performance bottlenecks (implemented block-based processing in batch_query.go, reducing CGO calls by ~64x).
 ✅ 4. **Implement proper context handling** to ensure resources are released on cancellation (fixed in batch_query.go, connection.go, and statement.go).
 5. **Reduce code duplication** through refactoring common patterns and extraction methods.
 ✅ 6. **Replace unsafe reflect.SliceHeader usage** with unsafe.Slice (Go 1.17+) to prevent future compatibility issues (fixed in parallel_api.go and rows.go).
 ✅ 7. **Improve thread safety** with consistent locking patterns (fixed in buffer_pool.go, batch_query.go, parallel_api.go, connection.go, string_cache.go, and statement.go).
 ✅ 8. **Fix unsafe empty BLOB handling** in statement.go and batch_query.go to prevent potential memory corruption.
 ✅ 9. **Add transaction support for appender** to ensure atomicity and prevent partial commits.
-10. **Add proper memory management** for native resources.
-🔄 11. **Implement batched processing** where currently using row-by-row operations (preparation work done in batch_query.go, full implementation in progress).
+✅ 10. **Add proper memory management** for native resources (implemented comprehensive vector pooling in column_vector_pool.go).
+✅ 11. **Implement batched processing** where currently using row-by-row operations (implemented block-based extraction in batch_query.go).
 
 ## Recent Fixes (March 2025)
 
@@ -375,3 +375,29 @@ This document highlights critical issues, unused methods, and performance bottle
   - Initial testing showed compatibility issues with optimized extraction that need further investigation
   - Full optimization will follow in subsequent PRs with possible 5-10x performance improvements
   - This work targets one of the most significant performance bottlenecks in the codebase
+
+#### Completed Optimizations
+- ✅ **Reduced CGO boundary crossings** (batch_query.go): Implemented block-based processing for batch extraction:
+  - Rewrote extractColumnBatch to process data in blocks (64 items at a time) instead of per-row
+  - Significantly reduced number of CGO function calls by ~64x for typical batches
+  - Added proper error handling and bounds checking for block-based operations
+  - Maintained compatibility with existing API pattern while improving performance
+  - All test suites pass with the new implementation, confirming correctness
+
+- ✅ **Vector pooling implementation** (column_vector_pool.go): Created comprehensive pooling for column vectors:
+  - Implemented ColumnVectorPool to efficiently reuse vector objects
+  - Added type-specific vector pools with thread-safe get/put operations
+  - Configured proper vector resetting to maintain memory efficiency
+  - Added automatic capacity management to avoid excessive memory usage
+  - Modified BatchQuery to integrate with the new pooling system
+  - Updated BatchQuery.Close() to properly return vectors to the pool
+  - Modified createColumnVector() to use pooled vectors instead of allocating new ones
+  - Significantly reduced GC pressure in high-throughput query scenarios
+
+- ✅ **Memory management improvements** (batch_query.go): Enhanced memory efficiency:
+  - Implemented proper cleanup routines that maintain vectors in reusable states
+  - Added reference tracking to safely manage shared resources
+  - Added size limits to prevent excessive memory consumption by vector pools
+  - Implemented smart resizing policy to balance memory usage and performance
+  - Added proper documentation for memory management patterns
+  - Fixed potential memory leaks in error handling paths
