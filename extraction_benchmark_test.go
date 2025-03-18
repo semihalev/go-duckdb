@@ -102,21 +102,21 @@ func BenchmarkExtractColumnBatch(b *testing.B) {
 
 	// Benchmark INTEGER extraction with different batch sizes
 	batchSizes := []int{100, 1000, 5000}
-	
+
 	for _, batchSize := range batchSizes {
 		b.Run(fmt.Sprintf("INTEGER_BatchSize=%d", batchSize), func(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
-			
+
 			for i := 0; i < b.N; i++ {
 				// Use an offset based on iteration to avoid query result caching
-				offset := (i * 97) % 9900  // Ensure we don't exceed row count
-				
+				offset := (i * 97) % 9900 // Ensure we don't exceed row count
+
 				rows, err := conn.QueryBatch(fmt.Sprintf("SELECT id, value, name FROM int_test WHERE id >= %d LIMIT 1000", offset), batchSize)
 				if err != nil {
 					b.Fatalf("Failed to execute batch query: %v", err)
 				}
-				
+
 				count := 0
 				for {
 					values := make([]driver.Value, 3)
@@ -130,22 +130,22 @@ func BenchmarkExtractColumnBatch(b *testing.B) {
 			}
 		})
 	}
-	
+
 	// Benchmark BIGINT extraction with different batch sizes
 	for _, batchSize := range batchSizes {
 		b.Run(fmt.Sprintf("BIGINT_BatchSize=%d", batchSize), func(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
-			
+
 			for i := 0; i < b.N; i++ {
 				// Use an offset based on iteration to avoid query result caching
-				offset := (i * 97) % 9900  // Ensure we don't exceed row count
-				
+				offset := (i * 97) % 9900 // Ensure we don't exceed row count
+
 				rows, err := conn.QueryBatch(fmt.Sprintf("SELECT id, value, name FROM bigint_test WHERE id >= %d LIMIT 1000", offset), batchSize)
 				if err != nil {
 					b.Fatalf("Failed to execute batch query: %v", err)
 				}
-				
+
 				count := 0
 				for {
 					values := make([]driver.Value, 3)
@@ -159,22 +159,22 @@ func BenchmarkExtractColumnBatch(b *testing.B) {
 			}
 		})
 	}
-	
+
 	// Benchmark DOUBLE extraction with different batch sizes
 	for _, batchSize := range batchSizes {
 		b.Run(fmt.Sprintf("DOUBLE_BatchSize=%d", batchSize), func(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
-			
+
 			for i := 0; i < b.N; i++ {
 				// Use an offset based on iteration to avoid query result caching
-				offset := (i * 97) % 9900  // Ensure we don't exceed row count
-				
+				offset := (i * 97) % 9900 // Ensure we don't exceed row count
+
 				rows, err := conn.QueryBatch(fmt.Sprintf("SELECT id, value, name FROM double_test WHERE id >= %d LIMIT 1000", offset), batchSize)
 				if err != nil {
 					b.Fatalf("Failed to execute batch query: %v", err)
 				}
-				
+
 				count := 0
 				for {
 					values := make([]driver.Value, 3)
@@ -188,22 +188,22 @@ func BenchmarkExtractColumnBatch(b *testing.B) {
 			}
 		})
 	}
-	
+
 	// Benchmark BOOLEAN extraction with different batch sizes
 	for _, batchSize := range batchSizes {
 		b.Run(fmt.Sprintf("BOOLEAN_BatchSize=%d", batchSize), func(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
-			
+
 			for i := 0; i < b.N; i++ {
 				// Use an offset based on iteration to avoid query result caching
-				offset := (i * 97) % 9900  // Ensure we don't exceed row count
-				
+				offset := (i * 97) % 9900 // Ensure we don't exceed row count
+
 				rows, err := conn.QueryBatch(fmt.Sprintf("SELECT id, value, name FROM bool_test WHERE id >= %d LIMIT 1000", offset), batchSize)
 				if err != nil {
 					b.Fatalf("Failed to execute batch query: %v", err)
 				}
-				
+
 				count := 0
 				for {
 					values := make([]driver.Value, 3)
@@ -217,16 +217,16 @@ func BenchmarkExtractColumnBatch(b *testing.B) {
 			}
 		})
 	}
-	
+
 	// Benchmark mixed column types (realistic use case)
 	b.Run("MixedTypes", func(b *testing.B) {
 		b.ResetTimer()
 		b.ReportAllocs()
-		
+
 		for i := 0; i < b.N; i++ {
 			// Use a more complex query with joins and multiple types
-			offset := (i * 97) % 9900  // Ensure we don't exceed row count
-			
+			offset := (i * 97) % 9900 // Ensure we don't exceed row count
+
 			query := fmt.Sprintf(`
 				SELECT i.id, i.value as int_val, b.value as bool_val, d.value as double_val
 				FROM int_test i
@@ -235,12 +235,12 @@ func BenchmarkExtractColumnBatch(b *testing.B) {
 				WHERE i.id >= %d
 				LIMIT 1000
 			`, offset)
-			
+
 			rows, err := conn.QueryBatch(query, 1000)
 			if err != nil {
 				b.Fatalf("Failed to execute complex batch query: %v", err)
 			}
-			
+
 			count := 0
 			for {
 				values := make([]driver.Value, 4)
@@ -255,7 +255,7 @@ func BenchmarkExtractColumnBatch(b *testing.B) {
 	})
 }
 
-// BenchmarkCompareOptimizations compares the performance of direct row-by-row extraction 
+// BenchmarkCompareOptimizations compares the performance of direct row-by-row extraction
 // vs the optimized batch extraction
 func BenchmarkCompareOptimizations(b *testing.B) {
 	// Skip if short test mode
@@ -287,7 +287,7 @@ func BenchmarkCompareOptimizations(b *testing.B) {
 
 	// Generate random test data
 	r := rand.New(rand.NewSource(42)) // Use fixed seed for reproducibility
-	
+
 	insertStmt, err := newStatement(conn, `
 		INSERT INTO test_data 
 		VALUES (?, ?, ?, ?, ?, ?)
@@ -301,7 +301,7 @@ func BenchmarkCompareOptimizations(b *testing.B) {
 	for i := 0; i < 10000; i++ {
 		// Mix of values with some nulls
 		var intVal, bigVal, doubleVal, boolVal, textVal driver.Value
-		
+
 		if i%10 != 0 { // 90% non-null values
 			intVal = r.Intn(1000000)
 			bigVal = int64(r.Intn(1000000)) * 1000000
@@ -309,7 +309,7 @@ func BenchmarkCompareOptimizations(b *testing.B) {
 			boolVal = (r.Intn(2) == 1)
 			textVal = fmt.Sprintf("text-%d-%d", i, r.Intn(1000))
 		}
-		
+
 		_, err = insertStmt.Exec([]driver.Value{
 			i,
 			intVal,
@@ -331,7 +331,7 @@ func BenchmarkCompareOptimizations(b *testing.B) {
 
 	// Compare optimized vs row-by-row extraction
 	benchmarkSizes := []int{100, 1000, 5000}
-	
+
 	for _, size := range benchmarkSizes {
 		// Test with different row limits
 		b.Run(fmt.Sprintf("Rows=%d", size), func(b *testing.B) {
@@ -339,11 +339,11 @@ func BenchmarkCompareOptimizations(b *testing.B) {
 			b.Run("Standard", func(b *testing.B) {
 				b.ResetTimer()
 				b.ReportAllocs()
-				
+
 				for i := 0; i < b.N; i++ {
 					// Use offset to avoid caching
 					offset := (i * 97) % (10000 - size)
-					
+
 					// Execute standard query and fetch results
 					rows, err := conn.Query(fmt.Sprintf(`
 						SELECT * FROM test_data 
@@ -354,7 +354,7 @@ func BenchmarkCompareOptimizations(b *testing.B) {
 					if err != nil {
 						b.Fatalf("Failed to execute standard query: %v", err)
 					}
-					
+
 					// Extract all rows
 					count := 0
 					for {
@@ -366,22 +366,22 @@ func BenchmarkCompareOptimizations(b *testing.B) {
 						count++
 					}
 					rows.Close()
-					
+
 					if count != size {
 						b.Fatalf("Expected %d rows, got %d", size, count)
 					}
 				}
 			})
-			
+
 			// Second benchmark: Optimized BatchQuery method
 			b.Run("BatchOptimized", func(b *testing.B) {
 				b.ResetTimer()
 				b.ReportAllocs()
-				
+
 				for i := 0; i < b.N; i++ {
 					// Use offset to avoid caching
 					offset := (i * 97) % (10000 - size)
-					
+
 					// Execute batch query with optimized extraction
 					rows, err := conn.QueryBatch(fmt.Sprintf(`
 						SELECT * FROM test_data 
@@ -392,7 +392,7 @@ func BenchmarkCompareOptimizations(b *testing.B) {
 					if err != nil {
 						b.Fatalf("Failed to execute batch query: %v", err)
 					}
-					
+
 					// Extract all rows
 					count := 0
 					for {
@@ -404,7 +404,7 @@ func BenchmarkCompareOptimizations(b *testing.B) {
 						count++
 					}
 					rows.Close()
-					
+
 					if count != size {
 						b.Fatalf("Expected %d rows, got %d", size, count)
 					}

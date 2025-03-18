@@ -138,13 +138,13 @@ func FallbackExtractBoolColumn(result uintptr, colIdx int, outBuffer []bool, nul
 //
 // Note on memory management:
 // This function internally calls duckdb_value_varchar which allocates memory
-// that needs to be freed with duckdb_free. The caller MUST call duckdb_free on 
+// that needs to be freed with duckdb_free. The caller MUST call duckdb_free on
 // each non-nil pointer in outPtrs after use to prevent memory leaks.
-// 
+//
 // Typically this is done in the higher-level extraction function, for example:
-//   1. Results.Release() for ZeroCopyResult
-//   2. StringTable.Release() for GlobalStringTable
-//   3. Explicit C.duckdb_free() calls in non-zero-copy extractors
+//  1. Results.Release() for ZeroCopyResult
+//  2. StringTable.Release() for GlobalStringTable
+//  3. Explicit C.duckdb_free() calls in non-zero-copy extractors
 func FallbackExtractStringColumnPtrs(result uintptr, colIdx int, outPtrs []*byte, outLens []int32, nullMask []bool, startRow, rowCount int) {
 	// Don't process anything if parameters are invalid
 	if result == 0 || len(outPtrs) < rowCount || len(outLens) < rowCount || len(nullMask) < rowCount {
@@ -311,7 +311,7 @@ func cStrLen(s *byte) int {
 	// Add a safety limit to prevent potential buffer overruns
 	// Most database strings shouldn't exceed this reasonable limit
 	const maxLen = 1 << 20 // 1 MB maximum string length
-	
+
 	for count < maxLen {
 		if *(*byte)(p) == 0 {
 			break

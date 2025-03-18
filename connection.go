@@ -148,7 +148,7 @@ func (c *Connection) PrepareContext(ctx context.Context, query string) (driver.S
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Wrap with FastStmtWrapper which properly implements driver.StmtQueryContext
 	return &FastStmtWrapper{
 		conn:  c,
@@ -205,7 +205,7 @@ func (c *Connection) ExecContext(ctx context.Context, query string, args []drive
 				default:
 					// Continue binding parameters
 				}
-				
+
 				idx := C.idx_t(i + 1) // Parameters are 1-indexed in DuckDB
 				if err := bindValue(stmt, idx, arg.Value); err != nil {
 					return nil, err
@@ -418,7 +418,7 @@ func (c *Connection) QueryContext(ctx context.Context, query string, args []driv
 				default:
 					// Continue binding parameters
 				}
-				
+
 				idx := C.idx_t(i + 1) // Parameters are 1-indexed in DuckDB
 				if err := bindValue(stmt, idx, arg.Value); err != nil {
 					return nil, err

@@ -697,7 +697,7 @@ func (bs *OptimizedBatchStmt) ExecBatchContext(ctx context.Context, values [][]i
 				// Continue validation
 			}
 		}
-		
+
 		if len(params) != expectedParams {
 			return nil, fmt.Errorf("parameter set %d has %d parameters, expected %d",
 				i, len(params), expectedParams)
@@ -722,7 +722,7 @@ func (bs *OptimizedBatchStmt) ExecBatchContext(ctx context.Context, values [][]i
 	default:
 		// Proceed with execution
 	}
-	
+
 	return bs.execBatchDirect(values, expectedParams)
 }
 
@@ -730,7 +730,7 @@ func (bs *OptimizedBatchStmt) ExecBatchContext(ctx context.Context, values [][]i
 func (bs *OptimizedBatchStmt) execBatchContextFallback(ctx context.Context, values [][]interface{}) (driver.Result, error) {
 	// We'll just reuse the existing fallback implementation but check context at regular intervals
 	// This simplifies the code significantly and avoids duplicating the binding logic
-	
+
 	// Check context before starting
 	select {
 	case <-ctx.Done():
@@ -738,14 +738,14 @@ func (bs *OptimizedBatchStmt) execBatchContextFallback(ctx context.Context, valu
 	default:
 		// Continue execution
 	}
-	
+
 	// Use the standard execution but check context after a reasonable number of batches
 	result, err := bs.execBatchFallback(values)
-	
+
 	// Check context again after completion (in case it was canceled but execution succeeded anyway)
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err() 
+		return nil, ctx.Err()
 	default:
 		return result, err
 	}
@@ -760,10 +760,10 @@ func (bs *OptimizedBatchStmt) execBatchChunkedContext(ctx context.Context, value
 	default:
 		// Continue execution
 	}
-	
+
 	// Use the regular chunked execution
 	result, err := bs.execBatchChunked(values, expectedParams)
-	
+
 	// Check context again after completion
 	select {
 	case <-ctx.Done():

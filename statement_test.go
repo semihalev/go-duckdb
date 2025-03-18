@@ -51,7 +51,7 @@ func TestEmptyBlobBinding(t *testing.T) {
 	values := make([]driver.Value, 2)
 	for rows.Next(values) == nil {
 		count++
-		
+
 		id, ok := values[0].(int32)
 		if !ok {
 			t.Errorf("Expected int32 for id, got %T", values[0])
@@ -173,7 +173,7 @@ func TestEmptyBlobBindingWithParameters(t *testing.T) {
 	values := make([]driver.Value, 2)
 	for rows.Next(values) == nil {
 		count++
-		
+
 		id, ok := values[0].(int32)
 		if !ok {
 			t.Errorf("Expected int32 for id, got %T", values[0])

@@ -98,13 +98,13 @@ func (s *Statement) ExecContext(ctx context.Context, args []driver.NamedValue) (
 
 	// Acquire lock, but don't hold it during the entire operation
 	s.mu.Lock()
-	
+
 	// First check - is the statement still valid?
 	if s.stmt == nil {
 		s.mu.Unlock()
 		return nil, errors.New("statement is closed")
 	}
-	
+
 	// Make a safe copy of the stmt pointer
 	stmtPtr := s.stmt
 	s.mu.Unlock()
@@ -151,13 +151,13 @@ func (s *Statement) Exec(args []driver.Value) (driver.Result, error) {
 
 	// Acquire lock, but don't hold it during the entire operation
 	s.mu.Lock()
-	
+
 	// First check - is the statement still valid?
 	if s.stmt == nil {
 		s.mu.Unlock()
 		return nil, errors.New("statement is closed")
 	}
-	
+
 	// Make a safe copy of the stmt pointer
 	stmtPtr := s.stmt
 	s.mu.Unlock()
@@ -215,13 +215,13 @@ func (s *Statement) QueryContext(ctx context.Context, args []driver.NamedValue) 
 
 	// Acquire lock, but don't hold it during the entire operation
 	s.mu.Lock()
-	
+
 	// First check - is the statement still valid?
 	if s.stmt == nil {
 		s.mu.Unlock()
 		return nil, errors.New("statement is closed")
 	}
-	
+
 	// Make a safe copy of the stmt pointer
 	stmtPtr := s.stmt
 	s.mu.Unlock()
@@ -269,13 +269,13 @@ func (s *Statement) Query(args []driver.Value) (driver.Rows, error) {
 
 	// Acquire lock, but don't hold it during the entire operation
 	s.mu.Lock()
-	
+
 	// First check - is the statement still valid?
 	if s.stmt == nil {
 		s.mu.Unlock()
 		return nil, errors.New("statement is closed")
 	}
-	
+
 	// Make a safe copy of the stmt pointer
 	stmtPtr := s.stmt
 	s.mu.Unlock()
@@ -325,7 +325,7 @@ func bindParameters(stmt *C.duckdb_prepared_statement, args []driver.NamedValue)
 			// If there's a logging framework, this would be a good place to log the error
 		}
 	}()
-	
+
 	for i, arg := range args {
 		idx := C.idx_t(i + 1) // Parameters are 1-indexed in DuckDB
 
@@ -397,7 +397,7 @@ func bindParameters(stmt *C.duckdb_prepared_statement, args []driver.NamedValue)
 				// Safely get pointer to the first byte in the slice
 				var dataPtr unsafe.Pointer
 				dataPtr = unsafe.Pointer(&v[0])
-				
+
 				if err := C.duckdb_bind_blob(*stmt, idx, dataPtr, C.idx_t(len(v))); err == C.DuckDBError {
 					return fmt.Errorf("failed to bind blob parameter at index %d", i)
 				}

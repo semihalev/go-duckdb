@@ -1405,7 +1405,7 @@ func cleanUnusedVectors() {
 		if len(typeMap) > maxVectorsPerType {
 			// Count how many vectors we have for this type
 			count := 0
-			
+
 			// First pass: free excess vectors
 			for elementSize, vector := range typeMap {
 				count++
@@ -1417,7 +1417,7 @@ func cleanUnusedVectors() {
 				}
 			}
 		}
-		
+
 		// If the map is now empty, remove it entirely
 		if len(typeMap) == 0 {
 			delete(vectorsByType, duckDBType)
@@ -1430,24 +1430,24 @@ func cleanUnusedVectors() {
 func GetPreallocatedVector(duckDBType int, elementSize int) *SafeColumnVector {
 	// Ensure thread-safe access to the map
 	vectorsLock.RLock()
-	
+
 	// Check if we have a type map for this DuckDB type
 	typeMap, typeOk := vectorsByType[duckDBType]
 	if !typeOk {
 		vectorsLock.RUnlock()
 		return nil
 	}
-	
+
 	// Check if we have a vector for this element size
 	vector, vectorOk := typeMap[elementSize]
-	
+
 	// Release read lock before returning
 	vectorsLock.RUnlock()
-	
+
 	if !vectorOk {
 		return nil
 	}
-	
+
 	return vector
 }
 

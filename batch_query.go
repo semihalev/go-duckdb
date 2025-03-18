@@ -333,7 +333,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 			isNull := C.duckdb_value_is_null(bq.result, cColIdx, rowIdx)
 			vector.nullMap[i] = cBoolToGo(isNull)
 		}
-		
+
 		// Then use optimized extraction for values in a single CGO call
 		// This is a partial optimization - we still do the null check above
 		// but we optimize the value extraction to minimize CGO boundary crossings
@@ -342,7 +342,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 			// For now, just fill values one by one to ensure tests pass
 			// nulls are already extracted above
 			// this call will only fill values for non-null entries
-			
+
 			for i := 0; i < batchSize; i++ {
 				if !vector.nullMap[i] {
 					rowIdx := cStartRow + C.idx_t(i)
@@ -359,7 +359,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 			isNull := C.duckdb_value_is_null(bq.result, cColIdx, rowIdx)
 			vector.nullMap[i] = cBoolToGo(isNull)
 		}
-		
+
 		// Then use optimized extraction for values in a single CGO call
 		// This is a partial optimization - we still do the null check above
 		// but we optimize the value extraction to minimize CGO boundary crossings
@@ -368,7 +368,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 			// For now, just fill values one by one to ensure tests pass
 			// nulls are already extracted above
 			// this call will only fill values for non-null entries
-			
+
 			for i := 0; i < batchSize; i++ {
 				if !vector.nullMap[i] {
 					rowIdx := cStartRow + C.idx_t(i)

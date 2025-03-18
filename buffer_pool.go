@@ -97,7 +97,7 @@ func (p *BufferPool) GetBuffer() *C.result_buffer_t {
 		// First free any resources that might be associated with this buffer
 		// free_result_buffer is thread-safe and handles its own locking
 		C.free_result_buffer(buffer)
-		
+
 		// Then zero out the buffer for clean state
 		// This is safe as we're the only ones with access to this buffer at this point
 		C.memset(unsafe.Pointer(buffer), 0, C.sizeof_result_buffer_t)
@@ -122,7 +122,7 @@ func (p *BufferPool) PutBuffer(buffer *C.result_buffer_t) {
 	// C structs are not atomically accessible in Go, and this struct
 	// could potentially be modified by C code concurrently.
 	// We need to capture the state carefully to avoid race conditions.
-	
+
 	// Important: Get values once to avoid TOCTTOU (time-of-check vs time-of-use) issues
 	// We accept the small possibility that these values might change after reading,
 	// which in worst case means we'll either discard a reusable buffer or attempt to

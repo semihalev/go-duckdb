@@ -211,7 +211,7 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 
 	// Ensure we have space in the column values (no lock needed for len)
 	if colIdx >= len(sc.columnValues) {
-		sc.mu.Lock() // Lock for column values expansion
+		sc.mu.Lock()                        // Lock for column values expansion
 		if colIdx >= len(sc.columnValues) { // Double-check after locking
 			newValues := make([]string, colIdx+1)
 			copy(newValues, sc.columnValues)
@@ -281,7 +281,7 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 	// For small strings, check intern map
 	if len(s) < sc.smallStringThreshold {
 		sc.mu.Lock() // Lock for map access
-		
+
 		// Look in intern map first
 		if cached, ok := sc.internMap[s]; ok {
 			sc.cStringMap[cstrAddr] = cached // Cache C string pointer too
@@ -296,7 +296,7 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 			sc.mu.Unlock() // Release lock before external call
 			result := globalBufferPool.GetSharedString(s)
 			sc.mu.Lock() // Re-acquire for updating maps
-			
+
 			// Cache in both maps
 			sc.internMap[s] = result
 			sc.cStringMap[cstrAddr] = result
@@ -318,12 +318,12 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 	// For medium strings with shared map
 	if len(s) < sc.largeStringThreshold && sc.useSharedStringMap {
 		result := globalBufferPool.GetSharedString(s)
-		
+
 		// Update C string cache
 		sc.mu.Lock()
 		sc.cStringMap[cstrAddr] = result
 		sc.mu.Unlock()
-		
+
 		sc.columnValues[colIdx] = result
 		sc.misses++
 		return result
@@ -334,7 +334,7 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 	sc.mu.Lock()
 	sc.cStringMap[cstrAddr] = s
 	sc.mu.Unlock()
-	
+
 	sc.columnValues[colIdx] = s
 	sc.misses++
 	return s
