@@ -84,7 +84,11 @@ func TestBatchQueryThreadSafety(t *testing.T) {
 	bq.resultOwned = false // So it doesn't try to free the result that result will free
 	defer bq.Close()
 	
-	// Create multiple goroutines that access the batch query concurrently
+	// Create batch rows from the batch query
+	br := NewBatchRows(bq)
+	defer br.Close()
+	
+	// Create multiple goroutines that access the batch rows concurrently
 	const numGoroutines = 10
 	
 	var wg sync.WaitGroup
@@ -100,8 +104,8 @@ func TestBatchQueryThreadSafety(t *testing.T) {
 				// Create a new value slice for each goroutine
 				values := make([]driver.Value, bq.columnCount)
 				
-				// Try to get the next row
-				err := bq.Next(values)
+				// Try to get the next row - this will call fetchNextBatch which we've synchronized
+				err := br.Next(values)
 				if err == io.EOF {
 					// End of data
 					break

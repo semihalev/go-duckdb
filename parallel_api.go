@@ -53,8 +53,9 @@ func (pe *ParallelExtractor) ProcessInt32Columns(colIndices []int, processor fun
 	// Then process the extracted data in parallel
 	var wg sync.WaitGroup
 	
-	// Use a buffered channel to avoid goroutine leaks
-	errChan := make(chan error, len(colIndices)+1)
+	// We don't need a buffered error channel with our errOnce approach
+	// Initialize it for consistent code structure but don't use it
+	_ = make(chan error, len(colIndices)+1)
 	
 	// Create a context with cancellation to ensure goroutines can be stopped
 	ctx, cancel := context.WithCancel(context.Background())
@@ -128,8 +129,9 @@ func (pe *ParallelExtractor) ProcessInt64Columns(colIndices []int, processor fun
 	// Then process the extracted data in parallel
 	var wg sync.WaitGroup
 	
-	// Use a buffered channel to avoid goroutine leaks
-	errChan := make(chan error, len(colIndices)+1)
+	// We don't need a buffered error channel with our errOnce approach
+	// Initialize it for consistent code structure but don't use it
+	_ = make(chan error, len(colIndices)+1)
 	
 	// Create a context with cancellation to ensure goroutines can be stopped
 	ctx, cancel := context.WithCancel(context.Background())
@@ -203,8 +205,9 @@ func (pe *ParallelExtractor) ProcessFloat64Columns(colIndices []int, processor f
 	// Then process the extracted data in parallel
 	var wg sync.WaitGroup
 	
-	// Use a buffered channel to avoid goroutine leaks
-	errChan := make(chan error, len(colIndices)+1)
+	// We don't need a buffered error channel with our errOnce approach
+	// Initialize it for consistent code structure but don't use it
+	_ = make(chan error, len(colIndices)+1)
 	
 	// Create a context with cancellation to ensure goroutines can be stopped
 	ctx, cancel := context.WithCancel(context.Background())
@@ -282,8 +285,9 @@ func (pe *ParallelExtractor) ProcessParallel(
 	// Then process the extracted data in parallel
 	var wg sync.WaitGroup
 	
-	// Use a buffered channel to avoid goroutine leaks
-	errChan := make(chan error, len(colIndices)+1)
+	// We don't need a buffered error channel with our errOnce approach
+	// Initialize it for consistent code structure but don't use it
+	_ = make(chan error, len(colIndices)+1)
 	
 	// Create a context with cancellation to ensure goroutines can be stopped
 	ctx, cancel := context.WithCancel(context.Background())
@@ -616,9 +620,9 @@ func (pe *ParallelExtractor) ProcessChunked(
 
 	var wg sync.WaitGroup
 	
-	// Buffered error channel to prevent goroutine leaks
-	// Use numChunks + 1 to ensure we never block when writing errors
-	errChan := make(chan error, numChunks+1)
+	// Buffered error channel is no longer needed since we use errOnce and processingErr
+	// But we'll create it and ignore it for code consistency and potential debugging
+	_ = make(chan error, numChunks+1)
 	
 	// Create a safe way to terminate early if an error occurs
 	// Use a parent context with timeout to prevent any possibility of leaked goroutines
