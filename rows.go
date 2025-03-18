@@ -42,7 +42,6 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"io"
-	"reflect"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -482,16 +481,24 @@ func (r *Rows) ExtractInt32Column(colIdx int) ([]int32, []bool, error) {
 	}
 
 	// Get pointers to Go slices for C to write directly into
-	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
-	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+	// Using safer approach with unsafe.Pointer instead of reflect.SliceHeader for Go 1.17+ compatibility
+	var valuesPtr unsafe.Pointer
+	var nullsPtr unsafe.Pointer
+
+	if len(values) > 0 {
+		valuesPtr = unsafe.Pointer(&values[0])
+	}
+	if len(nulls) > 0 {
+		nullsPtr = unsafe.Pointer(&nulls[0])
+	}
 
 	// Extract data using our optimized native code
 	// This uses SIMD and other optimizations when available
 	C.extractInt32Column(
 		resultPtr,
 		C.idx_t(colIdx),
-		(*C.int32_t)(unsafe.Pointer(valuesPtr)),
-		(*C.bool)(unsafe.Pointer(nullsPtr)),
+		(*C.int32_t)(valuesPtr),
+		(*C.bool)(nullsPtr),
 	)
 
 	return values, nulls, nil
@@ -525,15 +532,23 @@ func (r *Rows) ExtractInt64Column(colIdx int) ([]int64, []bool, error) {
 	}
 
 	// Get pointers to Go slices for C to write directly into
-	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
-	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+	// Using safer approach with unsafe.Pointer instead of reflect.SliceHeader for Go 1.17+ compatibility
+	var valuesPtr unsafe.Pointer
+	var nullsPtr unsafe.Pointer
+
+	if len(values) > 0 {
+		valuesPtr = unsafe.Pointer(&values[0])
+	}
+	if len(nulls) > 0 {
+		nullsPtr = unsafe.Pointer(&nulls[0])
+	}
 
 	// Extract data using our optimized native code
 	C.extractInt64Column(
 		resultPtr,
 		C.idx_t(colIdx),
-		(*C.int64_t)(unsafe.Pointer(valuesPtr)),
-		(*C.bool)(unsafe.Pointer(nullsPtr)),
+		(*C.int64_t)(valuesPtr),
+		(*C.bool)(nullsPtr),
 	)
 
 	return values, nulls, nil
@@ -567,15 +582,23 @@ func (r *Rows) ExtractFloat64Column(colIdx int) ([]float64, []bool, error) {
 	}
 
 	// Get pointers to Go slices for C to write directly into
-	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
-	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+	// Using safer approach with unsafe.Pointer instead of reflect.SliceHeader for Go 1.17+ compatibility
+	var valuesPtr unsafe.Pointer
+	var nullsPtr unsafe.Pointer
+
+	if len(values) > 0 {
+		valuesPtr = unsafe.Pointer(&values[0])
+	}
+	if len(nulls) > 0 {
+		nullsPtr = unsafe.Pointer(&nulls[0])
+	}
 
 	// Extract data using our optimized native code
 	C.extractFloat64Column(
 		resultPtr,
 		C.idx_t(colIdx),
-		(*C.double)(unsafe.Pointer(valuesPtr)),
-		(*C.bool)(unsafe.Pointer(nullsPtr)),
+		(*C.double)(valuesPtr),
+		(*C.bool)(nullsPtr),
 	)
 
 	return values, nulls, nil
@@ -609,15 +632,23 @@ func (r *Rows) ExtractTimestampColumn(colIdx int) ([]int64, []bool, error) {
 	}
 
 	// Get pointers to Go slices for C to write directly into
-	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
-	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+	// Using safer approach with unsafe.Pointer instead of reflect.SliceHeader for Go 1.17+ compatibility
+	var valuesPtr unsafe.Pointer
+	var nullsPtr unsafe.Pointer
+
+	if len(values) > 0 {
+		valuesPtr = unsafe.Pointer(&values[0])
+	}
+	if len(nulls) > 0 {
+		nullsPtr = unsafe.Pointer(&nulls[0])
+	}
 
 	// Extract data using our optimized native code
 	C.extractTimestampColumn(
 		resultPtr,
 		C.idx_t(colIdx),
-		(*C.int64_t)(unsafe.Pointer(valuesPtr)),
-		(*C.bool)(unsafe.Pointer(nullsPtr)),
+		(*C.int64_t)(valuesPtr),
+		(*C.bool)(nullsPtr),
 	)
 
 	return values, nulls, nil
@@ -651,15 +682,23 @@ func (r *Rows) ExtractDateColumn(colIdx int) ([]int32, []bool, error) {
 	}
 
 	// Get pointers to Go slices for C to write directly into
-	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
-	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+	// Using safer approach with unsafe.Pointer instead of reflect.SliceHeader for Go 1.17+ compatibility
+	var valuesPtr unsafe.Pointer
+	var nullsPtr unsafe.Pointer
+
+	if len(values) > 0 {
+		valuesPtr = unsafe.Pointer(&values[0])
+	}
+	if len(nulls) > 0 {
+		nullsPtr = unsafe.Pointer(&nulls[0])
+	}
 
 	// Extract data using our optimized native code
 	C.extractDateColumn(
 		resultPtr,
 		C.idx_t(colIdx),
-		(*C.int32_t)(unsafe.Pointer(valuesPtr)),
-		(*C.bool)(unsafe.Pointer(nullsPtr)),
+		(*C.int32_t)(valuesPtr),
+		(*C.bool)(nullsPtr),
 	)
 
 	return values, nulls, nil

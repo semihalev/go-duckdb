@@ -5,7 +5,7 @@ This document highlights critical issues, unused methods, and performance bottle
 ## buffer_pool.go
 
 ### Critical Issues
-- ✅ **FIXED: Race condition in lastCleanup access** (Lines 32-33, 110-125): Fixed by acquiring the lock before reading lastCleanup and maintaining it through the update.
+- ✅ **FIXED: Race condition in lastCleanup access** (Lines 32-33, 110-125): Fixed by acquiring the lock before reading lastCleanup and maintaining it through the update. Used defer for consistent unlock pattern.
 - ✅ **FIXED: Potential memory leak** (Lines 69-82): Fixed by ensuring resources are properly freed and implementing a nil check for retrieved buffers.
 - ✅ **FIXED: Race condition with ref_count** (Lines 92-104): Fixed by capturing current values of ref_count and error_code before checking them to avoid race conditions.
 - ✅ **FIXED: Nil pointer dereference risk** (Lines 71-76): Fixed by adding a nil check for buffers retrieved from the pool.
@@ -70,6 +70,7 @@ This document highlights critical issues, unused methods, and performance bottle
 - ✅ **FIXED: Duplicate functionality** (Lines 230-232): Added proper deprecation notices to `ExtractStringColumnZeroCopy` to clarify its purpose and direct users to the true zero-copy method.
 - ✅ **FIXED: Threading issue** (Lines 2373-2412): Fixed `extractColumnsParallel` to properly collect and report all errors from concurrent column extractions, not just the first one.
 - ✅ **FIXED: Thread safety concerns** (Lines 66-125): Improved StringTable thread safety by adding a mutex to ensure atomicity of operations across multiple maps, implemented double-checking pattern, and added proper nil handling.
+- ✅ **FIXED: Format string vulnerability** (Line 1206): Fixed by using constant format strings with proper error wrapping instead of dynamically constructed error messages.
 
 ### Unused Code
 - **Unused buffer pools** (Lines 136-148): `stringBufferPool` and `blobBufferPool` are defined but never used after the switch to true zero-copy methods.
@@ -151,10 +152,10 @@ This document highlights critical issues, unused methods, and performance bottle
 ## rows.go
 
 ### Critical Issues
-- **Unsafe pointer usage** (lines 484-486, 528-529, 570-571, 612-613, 654-655): Using reflect.SliceHeader is deprecated and unsafe. Should use unsafe.Slice instead for Go 1.17+.
+- ✅ **FIXED: Unsafe pointer usage** (lines 484-486, 528-529, 570-571, 612-613, 654-655): Replaced deprecated reflect.SliceHeader usage with the safer pattern of taking the address of the first slice element with proper nil checks for Go 1.17+ compatibility.
 - **Limited timestamp handling** (lines 391-396): Only handles one timestamp type properly while case statement includes multiple timestamp types. Should have specific handling for each timestamp precision.
 - **Thread safety concern** (lines 434-436): String cache is reset periodically based on row count, but could cause issues if accessed concurrently.
-- **Missing nil checks** (line 228): No nil check before accessing r.columnVectors in Close().
+- ✅ **FIXED: Missing nil checks** (line 228): A nil check for r.columnVectors was added in Close() method to prevent potential nil pointer dereference. This is present in the current implementation.
 
 ### Unused Code
 - **Memory leak risk** (line 252): Declared but unused emptyString variable.
@@ -169,8 +170,8 @@ This document highlights critical issues, unused methods, and performance bottle
 ## native_fallback.go
 
 ### Critical Issues
-- **Potential unsafe memory access** (Line 297-301): Potential unsafe memory access in cStrLen loop with no bounds checking.
-- **Memory management issues** (Lines 141-167): FallbackExtractStringColumnPtrs has no clear memory management strategy - comment on line 286 indicates caller must free memory, but there's no mechanism ensuring this happens.
+- ✅ **FIXED: Potential unsafe memory access** (Line 297-301): Added maximum string length limit (1MB) and proper bounds checking to cStrLen to prevent buffer overruns.
+- ✅ **FIXED: Memory management issues** (Lines 141-167): Added comprehensive documentation explaining memory management responsibilities and improved comments warning about required C.duckdb_free calls.
 
 ### Performance Bottlenecks
 - **Redundant NULL checks** (Lines 198-201, 217-220, 236-239, 255-258, 274-277): Redundant NULL checks in value extraction functions - these checks are already done at the call sites.
@@ -182,7 +183,7 @@ This document highlights critical issues, unused methods, and performance bottle
 
 ### Critical Issues
 - **Undefined symbol reference** (Lines 99, 120, 162, 185, 319, 393, 412): Code refers to `globalBufferPool.GetSharedString()` but the implementation isn't visible, suggesting missing implementation.
-- **Thread safety issues** (Lines 226-233): Problematic locking pattern in `GetFromCString`. The cStringMap access is locked, but unlocked before conversion work happens.
+- ✅ **FIXED: Thread safety issues** (Lines 226-233): Completely rewrote GetFromCString with proper locking patterns to fix problematic locking pattern that could lead to race conditions.
 - **Potential memory leak** (Lines 351-368): The `Reset()` method only resets maps when they grow very large (>10000 entries). For workloads with many unique strings just under this threshold, memory usage could grow substantially.
 - **Inconsistent nil checks** (Line 356): Code checks map sizes but never checks if maps are nil, which could cause panics.
 - **Missing bounds checking** (Lines 75-80, 135-140, 208-212): When expanding `columnValues`, there's no upper limit, which could lead to excessive memory usage.
@@ -214,13 +215,13 @@ This document highlights critical issues, unused methods, and performance bottle
 
 ## Priority Recommendations
 
-✅ 1. **Fix race conditions** in buffer_pool.go, batch_query.go (fixed), and string_cache.go which could cause crashes or memory corruption.
+✅ 1. **Fix race conditions** in buffer_pool.go, batch_query.go, and string_cache.go which could cause crashes or memory corruption.
 ✅ 2. **Address resource leaks** in connection handling and result processing (fixed in parallel_api.go, batch_query.go, and connection.go).
 3. **Optimize CGO boundary crossings** which are significant performance bottlenecks.
 ✅ 4. **Implement proper context handling** to ensure resources are released on cancellation (fixed in batch_query.go, connection.go, and statement.go).
 5. **Reduce code duplication** through refactoring common patterns and extraction methods.
-✅ 6. **Replace unsafe reflect.SliceHeader usage** with unsafe.Slice (Go 1.17+) to prevent future compatibility issues (fixed in parallel_api.go, still needed in rows.go).
-✅ 7. **Improve thread safety** with consistent locking patterns (fixed in buffer_pool.go, batch_query.go, parallel_api.go, and connection.go).
+✅ 6. **Replace unsafe reflect.SliceHeader usage** with unsafe.Slice (Go 1.17+) to prevent future compatibility issues (fixed in parallel_api.go and rows.go).
+✅ 7. **Improve thread safety** with consistent locking patterns (fixed in buffer_pool.go, batch_query.go, parallel_api.go, connection.go, and string_cache.go).
 ✅ 8. **Fix unsafe empty BLOB handling** in statement.go and batch_query.go to prevent potential memory corruption.
 ✅ 9. **Add transaction support for appender** to ensure atomicity and prevent partial commits.
 10. **Add proper memory management** for native resources.
@@ -278,6 +279,39 @@ This document highlights critical issues, unused methods, and performance bottle
   - Improved documentation to explain the purpose of each method
   - Maintained backward compatibility while guiding users to better alternatives
 
+### Security and Safety Fixes (March 2025)
+
+#### Issues Fixed
+- ✅ **Format string vulnerability** (native_result.go): Fixed use of non-constant format string in error handling.
+  - Changed from dynamically constructing error message with %d to using constant format strings
+  - Properly wrapped errors to maintain error chain for debugging
+  - Improved error clarity with better organization of additional error info
+  - This prevents potential security issues similar to SQL injection but in error formatting
+
+- ✅ **Unsafe memory access** (native_fallback.go): Fixed potential buffer overrun in cStrLen function.
+  - Added maximum string length limit of 1MB to prevent unbounded iteration
+  - Implemented proper bound checking to prevent accessing memory outside allocated regions
+  - Added clear safety checks for null pointer handling
+  - Improved documentation of memory safety considerations
+
+- ✅ **Memory management documentation** (native_fallback.go): Clarified memory ownership in string extraction.
+  - Added comprehensive documentation of memory management responsibilities
+  - Clearly marked functions that allocate C memory requiring explicit freeing
+  - Added examples of proper memory cleanup patterns in higher-level functions
+  - Improved warnings about potential memory leaks
+
+- ✅ **Thread safety in buffer management** (buffer_pool.go): Fixed race conditions in buffer pool.
+  - Implemented proper locking in maybeCleanup to prevent lastCleanup races
+  - Used defer to ensure locks are always released even in error paths
+  - Added proper documentation of thread safety considerations
+  - Added defensive coding patterns to prevent time-of-check vs time-of-use bugs
+
+- ✅ **String cache race conditions** (string_cache.go): Completely rewrote GetFromCString method.
+  - Implemented proper locking patterns to prevent race conditions with cached strings
+  - Added double-checking for map access safety
+  - Fixed problematic pattern where locks were released too early
+  - Ensured locks are properly acquired and released on all code paths
+
 #### Technical Notes
 1. DuckDB returns BLOBs as formatted string literals like `\x01\x02\x03\x04\x05` in some implementations, not byte slices
 2. Empty BLOBs should be bound with `nil` pointer and size 0, not with a temporary slice
@@ -287,3 +321,18 @@ This document highlights critical issues, unused methods, and performance bottle
 6. Map access patterns must be carefully designed in concurrent code to avoid race conditions
 7. When using multiple maps for related data (like StringTable's strings and refCounts), operations must be atomic across all maps
 8. Double-checking patterns are essential when using sync.Map with additional synchronization mechanisms
+9. Format strings in error handling must use constant formats to prevent potential string formatting exploits
+10. Unsafe memory access in string handling must include proper bounds checking to prevent buffer overruns
+11. Locks must be held during the entire critical section to prevent race conditions
+12. Defensive programming techniques like avoiding TOCTTOU (Time-of-check to time-of-use) bugs are essential for thread safety
+
+### Memory Safety and Go 1.17+ Compatibility Fixes (March 2025)
+
+#### Issues Fixed
+- ✅ **Fixed reflect.SliceHeader usage** (rows.go): Replaced deprecated and unsafe reflect.SliceHeader usage with the safer pattern:
+  - Previously: Used `(*reflect.SliceHeader)(unsafe.Pointer(&slice)).Data` to get slice data pointer
+  - Now: Uses `unsafe.Pointer(&slice[0])` with proper nil checks when slice is empty
+  - This approach is compatible with Go 1.17+ where SliceHeader is deprecated
+  - Added proper nil handling for empty slices to prevent panics
+  - Improved documentation to explain the safety concerns
+  - Applied consistent pattern across all column extraction methods
