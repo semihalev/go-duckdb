@@ -1606,15 +1606,29 @@ func (dr *DirectResult) ExtractInt32Column(colIdx int) ([]int32, []bool, error) 
 	values := make([]int32, rowCount)
 	nulls := make([]bool, rowCount)
 
-	// Use direct row-by-row extraction instead of the C function
-	// until we can troubleshoot the C function
-	for i := 0; i < rowCount; i++ {
-		isNull := bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(i)))
-		nulls[i] = isNull
+	// Use block-based extraction to reduce CGO boundary crossings
+	// This processes data in chunks rather than row-by-row
+	const blockSize = 64
+	for startRow := 0; startRow < rowCount; startRow += blockSize {
+		// Calculate end of current block (handles final partial block)
+		endRow := startRow + blockSize
+		if endRow > rowCount {
+			endRow = rowCount
+		}
+		blockCount := endRow - startRow
 
-		if !isNull {
-			value := int32(C.duckdb_value_int32(dr.result, C.idx_t(colIdx), C.idx_t(i)))
-			values[i] = value
+		// Process block of null values first
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			nulls[pos] = bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
+		}
+
+		// Process block of actual values (only for non-null entries)
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			if !nulls[pos] {
+				values[pos] = int32(C.duckdb_value_int32(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
+			}
 		}
 	}
 
@@ -1644,15 +1658,29 @@ func (dr *DirectResult) ExtractInt64Column(colIdx int) ([]int64, []bool, error) 
 	values := make([]int64, rowCount)
 	nulls := make([]bool, rowCount)
 
-	// Use direct row-by-row extraction instead of the C function
-	// until we can troubleshoot the C function
-	for i := 0; i < rowCount; i++ {
-		isNull := bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(i)))
-		nulls[i] = isNull
+	// Use block-based extraction to reduce CGO boundary crossings
+	// This processes data in chunks rather than row-by-row
+	const blockSize = 64
+	for startRow := 0; startRow < rowCount; startRow += blockSize {
+		// Calculate end of current block (handles final partial block)
+		endRow := startRow + blockSize
+		if endRow > rowCount {
+			endRow = rowCount
+		}
+		blockCount := endRow - startRow
 
-		if !isNull {
-			value := int64(C.duckdb_value_int64(dr.result, C.idx_t(colIdx), C.idx_t(i)))
-			values[i] = value
+		// Process block of null values first
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			nulls[pos] = bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
+		}
+
+		// Process block of actual values (only for non-null entries)
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			if !nulls[pos] {
+				values[pos] = int64(C.duckdb_value_int64(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
+			}
 		}
 	}
 
@@ -1682,15 +1710,29 @@ func (dr *DirectResult) ExtractFloat64Column(colIdx int) ([]float64, []bool, err
 	values := make([]float64, rowCount)
 	nulls := make([]bool, rowCount)
 
-	// Use direct row-by-row extraction instead of the C function
-	// until we can troubleshoot the C function
-	for i := 0; i < rowCount; i++ {
-		isNull := bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(i)))
-		nulls[i] = isNull
+	// Use block-based extraction to reduce CGO boundary crossings
+	// This processes data in chunks rather than row-by-row
+	const blockSize = 64
+	for startRow := 0; startRow < rowCount; startRow += blockSize {
+		// Calculate end of current block (handles final partial block)
+		endRow := startRow + blockSize
+		if endRow > rowCount {
+			endRow = rowCount
+		}
+		blockCount := endRow - startRow
 
-		if !isNull {
-			value := float64(C.duckdb_value_double(dr.result, C.idx_t(colIdx), C.idx_t(i)))
-			values[i] = value
+		// Process block of null values first
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			nulls[pos] = bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
+		}
+
+		// Process block of actual values (only for non-null entries)
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			if !nulls[pos] {
+				values[pos] = float64(C.duckdb_value_double(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
+			}
 		}
 	}
 
@@ -1720,18 +1762,34 @@ func (dr *DirectResult) ExtractStringColumn(colIdx int) ([]string, []bool, error
 	strings := make([]string, rowCount)
 	nulls := make([]bool, rowCount)
 
-	// For now, we'll implement this manually using basic DuckDB API calls
-	for i := 0; i < rowCount; i++ {
-		// Check if the value is NULL
-		nulls[i] = bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(i)))
+	// Use block-based extraction to reduce CGO boundary crossings
+	// This processes data in chunks rather than row-by-row
+	const blockSize = 64
+	for startRow := 0; startRow < rowCount; startRow += blockSize {
+		// Calculate end of current block (handles final partial block)
+		endRow := startRow + blockSize
+		if endRow > rowCount {
+			endRow = rowCount
+		}
+		blockCount := endRow - startRow
 
-		if !nulls[i] {
-			// This approach is expensive but safe - convert row to JSON string and extract value
-			jsonStr := C.duckdb_value_varchar(dr.result, C.idx_t(colIdx), C.idx_t(i))
-			if jsonStr != nil {
-				goStr := C.GoString(jsonStr)
-				strings[i] = goStr
-				C.duckdb_free(unsafe.Pointer(jsonStr))
+		// Process block of null values first
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			nulls[pos] = bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
+		}
+
+		// Process block of actual values (only for non-null entries)
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			if !nulls[pos] {
+				// This approach is expensive but safe - convert row to JSON string and extract value
+				jsonStr := C.duckdb_value_varchar(dr.result, C.idx_t(colIdx), C.idx_t(pos))
+				if jsonStr != nil {
+					goStr := C.GoString(jsonStr)
+					strings[pos] = goStr
+					C.duckdb_free(unsafe.Pointer(jsonStr))
+				}
 			}
 		}
 	}
