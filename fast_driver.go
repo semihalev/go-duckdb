@@ -66,6 +66,14 @@ func (conn *Connection) fastExecDirect(query string) (driver.Result, error) {
 
 // FastExecContext executes a query without returning any rows, with context and named parameters.
 func (conn *Connection) FastExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	// First check context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Proceed if context is still valid
+	}
+
 	// If no parameters, use direct execution
 	if len(args) == 0 {
 		return conn.fastExecDirect(query)
@@ -78,18 +86,34 @@ func (conn *Connection) FastExecContext(ctx context.Context, query string, args 
 	}
 	defer stmt.Close()
 
+	// Check context again before proceeding
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Continue if still valid
+	}
+
 	// Convert named parameters to positional for our implementation
 	params := make([]interface{}, len(args))
 	for i, arg := range args {
 		params[i] = arg.Value
 	}
 
-	// Execute with parameters
-	return stmt.ExecuteWithResult(params...)
+	// Execute with parameters and respect context cancellation
+	return stmt.ExecContext(ctx, args)
 }
 
 // FastQueryContext executes a query that returns rows, with context and named parameters.
 func (conn *Connection) FastQueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	// First check context cancellation
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Proceed if context is still valid
+	}
+
 	// If no parameters, use direct query
 	if len(args) == 0 {
 		return conn.FastQuery(query)
@@ -101,14 +125,17 @@ func (conn *Connection) FastQueryContext(ctx context.Context, query string, args
 		return nil, err
 	}
 
-	// Convert named parameters to positional
-	params := make([]interface{}, len(args))
-	for i, arg := range args {
-		params[i] = arg.Value
+	// Check context again before proceeding
+	select {
+	case <-ctx.Done():
+		stmt.Close() // Clean up resources
+		return nil, ctx.Err()
+	default:
+		// Continue if still valid
 	}
 
-	// Execute the query with parameters
-	return stmt.ExecuteFast(params...)
+	// Execute the query with context support
+	return stmt.QueryContext(ctx, args)
 }
 
 // FastQuery executes a direct query with the fast driver.
@@ -199,14 +226,56 @@ func (stmt *FastStmt) Exec(args []driver.Value) (driver.Result, error) {
 
 // ExecContext implements the driver.StmtExecContext interface.
 func (stmt *FastStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	// Check if statement is closed
+	if stmt.stmt == nil {
+		return nil, fmt.Errorf("statement is closed")
+	}
+
+	// Check for context cancellation first
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Proceed if context still valid
+	}
+
 	// Convert driver.NamedValue to interface{}
 	params := make([]interface{}, len(args))
 	for i, arg := range args {
 		params[i] = arg.Value
 	}
 
-	// TODO: Respect context cancellation in the future
-	return stmt.ExecuteWithResult(params...)
+	// Bind parameters
+	if err := stmt.bindParameters(params); err != nil {
+		return nil, err
+	}
+
+	// Check context again before executing
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Proceed with execution
+	}
+
+	// Get buffer from pool
+	buffer := GetBuffer()
+	defer PutBuffer(buffer)
+
+	// Execute prepared statement with vectorized C adapter
+	result := C.execute_prepared_vectorized(*stmt.stmt, buffer)
+
+	if result == 0 {
+		return nil, fmt.Errorf("failed to execute statement: %s", C.GoString(buffer.error_message))
+	}
+
+	// Extract affected rows information
+	rowsAffected := int64(buffer.rows_affected)
+
+	return &Result{
+		rowsAffected: rowsAffected,
+		lastInsertID: 0, // DuckDB doesn't support last insert ID
+	}, nil
 }
 
 // Query implements the driver.Stmt interface.
@@ -222,14 +291,52 @@ func (stmt *FastStmt) Query(args []driver.Value) (driver.Rows, error) {
 
 // QueryContext implements the driver.StmtQueryContext interface.
 func (stmt *FastStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	// Check if statement is closed
+	if stmt.stmt == nil {
+		return nil, fmt.Errorf("statement is closed")
+	}
+
+	// Check for context cancellation first
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Proceed if context still valid
+	}
+
 	// Convert driver.NamedValue to interface{}
 	params := make([]interface{}, len(args))
 	for i, arg := range args {
 		params[i] = arg.Value
 	}
 
-	// TODO: Respect context cancellation in the future
-	return stmt.ExecuteFast(params...)
+	// Bind parameters
+	if err := stmt.bindParameters(params); err != nil {
+		return nil, err
+	}
+
+	// Check context again before executing
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Proceed with execution
+	}
+
+	// Get buffer from pool
+	buffer := GetBuffer()
+
+	// Execute prepared statement with vectorized C adapter
+	result := C.execute_prepared_vectorized(*stmt.stmt, buffer)
+	if result == 0 {
+		// Return buffer to pool on error
+		PutBuffer(buffer)
+		return nil, fmt.Errorf("failed to execute statement: %s", C.GoString(buffer.error_message))
+	}
+
+	// Create FastRows from buffer and return
+	// The buffer's ownership is transferred to FastRows
+	return newFastRowsFromBuffer(buffer), nil
 }
 
 // ExecuteFast executes the prepared statement with the fast driver.

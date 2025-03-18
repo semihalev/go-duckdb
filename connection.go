@@ -131,6 +131,14 @@ func (c *Connection) PrepareContext(ctx context.Context, query string) (driver.S
 		return nil, driver.ErrBadConn
 	}
 
+	// Check if context is already canceled
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Context is still valid, proceed
+	}
+
 	// Always use fast driver implementation
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -142,6 +150,14 @@ func (c *Connection) PrepareContext(ctx context.Context, query string) (driver.S
 func (c *Connection) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	if atomic.LoadInt32(&c.closed) != 0 {
 		return nil, driver.ErrBadConn
+	}
+
+	// Check if context is already canceled
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Context is still valid, proceed
 	}
 
 	c.mu.Lock()
@@ -171,10 +187,26 @@ func (c *Connection) ExecContext(ctx context.Context, query string, args []drive
 
 			// Bind parameters
 			for i, arg := range args {
+				// Check if context was canceled during parameter binding
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				default:
+					// Continue binding parameters
+				}
+				
 				idx := C.idx_t(i + 1) // Parameters are 1-indexed in DuckDB
 				if err := bindValue(stmt, idx, arg.Value); err != nil {
 					return nil, err
 				}
+			}
+
+			// Check context again before executing
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+				// Proceed with execution
 			}
 
 			// Execute statement
@@ -187,6 +219,14 @@ func (c *Connection) ExecContext(ctx context.Context, query string, args []drive
 			// Direct query without parameters
 			cQuery := cString(query)
 			defer freeString(cQuery)
+
+			// Check context again before executing direct query
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+				// Proceed with execution
+			}
 
 			if err := C.duckdb_query(*c.conn, cQuery, &result); err == C.DuckDBError {
 				errMsg := goString(C.duckdb_result_error(&result))
@@ -325,6 +365,14 @@ func (c *Connection) QueryContext(ctx context.Context, query string, args []driv
 		return nil, driver.ErrBadConn
 	}
 
+	// Check if context is already canceled
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Context is still valid, proceed
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -352,10 +400,26 @@ func (c *Connection) QueryContext(ctx context.Context, query string, args []driv
 
 			// Bind parameters
 			for i, arg := range args {
+				// Check if context was canceled during parameter binding
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				default:
+					// Continue binding parameters
+				}
+				
 				idx := C.idx_t(i + 1) // Parameters are 1-indexed in DuckDB
 				if err := bindValue(stmt, idx, arg.Value); err != nil {
 					return nil, err
 				}
+			}
+
+			// Check context again before executing
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+				// Proceed with execution
 			}
 
 			// Execute statement
@@ -368,6 +432,14 @@ func (c *Connection) QueryContext(ctx context.Context, query string, args []driv
 			// Direct query without parameters
 			cQuery := cString(query)
 			defer freeString(cQuery)
+
+			// Check context again before executing direct query
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+				// Proceed with execution
+			}
 
 			if err := C.duckdb_query(*c.conn, cQuery, &result); err == C.DuckDBError {
 				errMsg := goString(C.duckdb_result_error(&result))
@@ -450,20 +522,21 @@ func (c *Connection) QueryDirectResult(query string) (*DirectResult, error) {
 		return nil, ErrConnectionClosed
 	}
 
-	// Only lock during the preparation and parameter binding phase
+	// Lock for the entire operation to ensure consistent locking strategy
 	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Check again after lock acquisition
 	if atomic.LoadInt32(&c.closed) != 0 {
-		c.mu.Unlock()
 		return nil, ErrConnectionClosed
 	}
 
 	// Convert query to C string (under lock to protect from concurrent frees)
 	cQuery := cString(query)
-	c.mu.Unlock() // Release lock before the actual query execution
-
 	defer freeString(cQuery)
 
-	// Execute query without holding the connection lock
+	// Execute query while holding the connection lock
+	// This aligns with the pattern used in ExecContext and QueryContext
 	var result C.duckdb_result
 	if err := C.duckdb_query(*c.conn, cQuery, &result); err == C.DuckDBError {
 		errMsg := C.GoString(C.duckdb_result_error(&result))
@@ -716,4 +789,30 @@ func (conn *Connection) BatchExec(query string, parameterSets [][]interface{}) (
 
 	// Execute the batch
 	return stmt.ExecBatch(parameterSets)
+}
+
+// BatchExecContext prepares and executes a statement with multiple parameter sets in a single batch operation
+// with context support for cancellation
+func (conn *Connection) BatchExecContext(ctx context.Context, query string, parameterSets [][]interface{}) (driver.Result, error) {
+	if atomic.LoadInt32(&conn.closed) != 0 {
+		return nil, driver.ErrBadConn
+	}
+
+	// Check if context is already canceled
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Context is still valid, proceed
+	}
+
+	// Prepare the batch statement
+	stmt, err := NewOptimizedBatchStmt(conn, query)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+
+	// Execute the batch with context
+	return stmt.ExecBatchContext(ctx, parameterSets)
 }

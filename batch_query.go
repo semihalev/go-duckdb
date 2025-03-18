@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"sync"
 	"unsafe"
 )
 
@@ -33,6 +34,9 @@ type BatchQuery struct {
 	batchSize   int
 	closed      bool
 	resultOwned bool // Whether this query owns the result and should free it
+
+	// Mutex to protect concurrent access to shared state
+	mu sync.RWMutex
 
 	// Reusable vectors to avoid allocations
 	vectors []*ColumnVector
@@ -202,6 +206,9 @@ func (bq *BatchQuery) ColumnTypeScanType(index int) reflect.Type {
 
 // Close closes the query and releases associated resources
 func (bq *BatchQuery) Close() error {
+	bq.mu.Lock()
+	defer bq.mu.Unlock()
+
 	if bq.closed {
 		return nil
 	}
@@ -223,6 +230,14 @@ func (bq *BatchQuery) Close() error {
 // fetchNextBatch fetches the next batch of rows from the result
 // This is where the core batch processing happens
 func (bq *BatchQuery) fetchNextBatch() bool {
+	bq.mu.Lock()
+	defer bq.mu.Unlock()
+
+	// Check if the query was closed
+	if bq.closed {
+		return false
+	}
+
 	// Check if we're at the end of results
 	if bq.currentRow >= bq.rowCount {
 		bq.batchAvailable = 0
@@ -243,6 +258,10 @@ func (bq *BatchQuery) fetchNextBatch() bool {
 
 	// Extract data in column-wise fashion (much more efficient than row-wise)
 	for colIdx := 0; colIdx < bq.columnCount; colIdx++ {
+		if colIdx >= len(bq.vectors) || bq.vectors[colIdx] == nil {
+			continue // Skip if vector is nil (should never happen, but protect against panic)
+		}
+
 		vector := bq.vectors[colIdx]
 		vector.length = batchSize
 
@@ -367,21 +386,30 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 			if !vector.nullMap[i] {
 				rowIdx := cStartRow + C.idx_t(i)
 				blob := C.duckdb_value_blob(bq.result, cColIdx, rowIdx)
-				if blob.data != nil && blob.size > 0 {
-					size := int(blob.size)
-					// Allocate a new buffer for this blob
-					buffer := make([]byte, size)
-					// Copy blob data
-					C.memcpy(unsafe.Pointer(&buffer[0]), unsafe.Pointer(blob.data), C.size_t(size))
-					vector.blobData[i] = buffer
-					// Free DuckDB blob memory
-					C.duckdb_free(blob.data)
+
+				// Fixed: Handle blob data safely to prevent memory leaks
+				if blob.data != nil {
+					// Store the pointer locally to avoid race conditions
+					blobData := blob.data
+
+					if blob.size > 0 {
+						size := int(blob.size)
+						// Allocate a new buffer for this blob
+						buffer := make([]byte, size)
+						// Copy blob data safely
+						C.memcpy(unsafe.Pointer(&buffer[0]), unsafe.Pointer(blobData), C.size_t(size))
+						vector.blobData[i] = buffer
+					} else {
+						vector.blobData[i] = []byte{}
+					}
+
+					// Free the C memory after safely copying it
+					C.duckdb_free(blobData)
 				} else {
 					vector.blobData[i] = []byte{}
 				}
 			}
 		}
-
 	default:
 		// For other types, convert to string for now
 		// This can be optimized further for specific types
@@ -423,6 +451,9 @@ func NewBatchRows(query *BatchQuery) *BatchRows {
 
 // Columns returns the names of the columns
 func (br *BatchRows) Columns() []string {
+	if br.query == nil {
+		return nil
+	}
 	return br.query.Columns()
 }
 
@@ -447,22 +478,47 @@ func (br *BatchRows) ColumnTypeScanType(index int) reflect.Type {
 // This is where the key batch optimization happens - we only fetch new batches
 // when we've exhausted the current one
 func (br *BatchRows) Next(dest []driver.Value) error {
-	if br.query == nil {
+	// Get a safe reference to the query to avoid nil pointer issues if Close is called concurrently
+	query := br.query
+	if query == nil {
 		return io.EOF
 	}
 
+	// Using query reference to ensure thread safety
+	// This doesn't prevent the query from being closed, but prevents nil dereference
+
 	// Check if we need a new batch
-	if br.rowInBatch >= br.query.batchAvailable {
+	if br.rowInBatch >= query.batchAvailable {
 		// Try to fetch the next batch
-		if !br.query.fetchNextBatch() {
+		if !query.fetchNextBatch() {
 			return io.EOF
 		}
 		br.rowInBatch = 0
 	}
 
+	// Get a read lock for accessing query data
+	query.mu.RLock()
+	defer query.mu.RUnlock()
+
+	// Safety check - query may have been closed while we were waiting for the lock
+	if query.closed {
+		return io.EOF
+	}
+
 	// Get row data from current batch
 	for i := 0; i < br.columnCount && i < len(dest); i++ {
-		vector := br.query.vectors[i]
+		// Safety check for vectors
+		if i >= len(query.vectors) || query.vectors[i] == nil {
+			dest[i] = nil
+			continue
+		}
+		vector := query.vectors[i]
+
+		// Safety check for row index
+		if br.rowInBatch >= len(vector.nullMap) {
+			dest[i] = nil
+			continue
+		}
 
 		// Check for NULL
 		if vector.nullMap[br.rowInBatch] {
@@ -471,35 +527,65 @@ func (br *BatchRows) Next(dest []driver.Value) error {
 		}
 
 		// Extract value based on column type
-		switch br.query.columnTypes[i] {
-		case C.DUCKDB_TYPE_BOOLEAN:
-			dest[i] = vector.boolData[br.rowInBatch]
-		case C.DUCKDB_TYPE_TINYINT:
-			dest[i] = vector.int8Data[br.rowInBatch]
-		case C.DUCKDB_TYPE_SMALLINT:
-			dest[i] = vector.int16Data[br.rowInBatch]
-		case C.DUCKDB_TYPE_INTEGER:
-			dest[i] = vector.int32Data[br.rowInBatch]
-		case C.DUCKDB_TYPE_BIGINT:
-			dest[i] = vector.int64Data[br.rowInBatch]
-		case C.DUCKDB_TYPE_UTINYINT:
-			dest[i] = vector.uint8Data[br.rowInBatch]
-		case C.DUCKDB_TYPE_USMALLINT:
-			dest[i] = vector.uint16Data[br.rowInBatch]
-		case C.DUCKDB_TYPE_UINTEGER:
-			dest[i] = vector.uint32Data[br.rowInBatch]
-		case C.DUCKDB_TYPE_UBIGINT:
-			dest[i] = vector.uint64Data[br.rowInBatch]
-		case C.DUCKDB_TYPE_FLOAT:
-			dest[i] = vector.float32Data[br.rowInBatch]
-		case C.DUCKDB_TYPE_DOUBLE:
-			dest[i] = vector.float64Data[br.rowInBatch]
-		case C.DUCKDB_TYPE_VARCHAR:
-			dest[i] = vector.stringData[br.rowInBatch]
-		case C.DUCKDB_TYPE_BLOB:
-			dest[i] = vector.blobData[br.rowInBatch]
-		default:
-			dest[i] = vector.timeData[br.rowInBatch]
+		if i < len(query.columnTypes) {
+			switch query.columnTypes[i] {
+			case C.DUCKDB_TYPE_BOOLEAN:
+				if br.rowInBatch < len(vector.boolData) {
+					dest[i] = vector.boolData[br.rowInBatch]
+				}
+			case C.DUCKDB_TYPE_TINYINT:
+				if br.rowInBatch < len(vector.int8Data) {
+					dest[i] = vector.int8Data[br.rowInBatch]
+				}
+			case C.DUCKDB_TYPE_SMALLINT:
+				if br.rowInBatch < len(vector.int16Data) {
+					dest[i] = vector.int16Data[br.rowInBatch]
+				}
+			case C.DUCKDB_TYPE_INTEGER:
+				if br.rowInBatch < len(vector.int32Data) {
+					dest[i] = vector.int32Data[br.rowInBatch]
+				}
+			case C.DUCKDB_TYPE_BIGINT:
+				if br.rowInBatch < len(vector.int64Data) {
+					dest[i] = vector.int64Data[br.rowInBatch]
+				}
+			case C.DUCKDB_TYPE_UTINYINT:
+				if br.rowInBatch < len(vector.uint8Data) {
+					dest[i] = vector.uint8Data[br.rowInBatch]
+				}
+			case C.DUCKDB_TYPE_USMALLINT:
+				if br.rowInBatch < len(vector.uint16Data) {
+					dest[i] = vector.uint16Data[br.rowInBatch]
+				}
+			case C.DUCKDB_TYPE_UINTEGER:
+				if br.rowInBatch < len(vector.uint32Data) {
+					dest[i] = vector.uint32Data[br.rowInBatch]
+				}
+			case C.DUCKDB_TYPE_UBIGINT:
+				if br.rowInBatch < len(vector.uint64Data) {
+					dest[i] = vector.uint64Data[br.rowInBatch]
+				}
+			case C.DUCKDB_TYPE_FLOAT:
+				if br.rowInBatch < len(vector.float32Data) {
+					dest[i] = vector.float32Data[br.rowInBatch]
+				}
+			case C.DUCKDB_TYPE_DOUBLE:
+				if br.rowInBatch < len(vector.float64Data) {
+					dest[i] = vector.float64Data[br.rowInBatch]
+				}
+			case C.DUCKDB_TYPE_VARCHAR:
+				if br.rowInBatch < len(vector.stringData) {
+					dest[i] = vector.stringData[br.rowInBatch]
+				}
+			case C.DUCKDB_TYPE_BLOB:
+				if br.rowInBatch < len(vector.blobData) {
+					dest[i] = vector.blobData[br.rowInBatch]
+				}
+			default:
+				if br.rowInBatch < len(vector.timeData) {
+					dest[i] = vector.timeData[br.rowInBatch]
+				}
+			}
 		}
 	}
 
@@ -676,7 +762,9 @@ func (bs *BatchStmt) bindBatchParameters(args []interface{}) error {
 
 		case []byte:
 			if len(v) == 0 {
-				if err := C.duckdb_bind_blob(*bs.stmt, idx, unsafe.Pointer(&[]byte{0}[0]), C.idx_t(0)); err == C.DuckDBError {
+				// Fixed: Use a more memory-safe approach for empty blobs
+				emptyBuffer := make([]byte, 0)
+				if err := C.duckdb_bind_blob(*bs.stmt, idx, unsafe.Pointer(&emptyBuffer), C.idx_t(0)); err == C.DuckDBError {
 					return fmt.Errorf("failed to bind empty blob parameter at index %d", i)
 				}
 			} else {
@@ -729,13 +817,19 @@ func (bs *BatchStmt) QueryContext(ctx context.Context, args []driver.NamedValue)
 		return nil, errors.New("statement is closed")
 	}
 
+	// Check if context is already canceled
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Context is still valid, proceed
+	}
+
 	// Convert named parameters to positional for our implementation
 	params := make([]interface{}, len(args))
 	for i, arg := range args {
 		params[i] = arg.Value
 	}
-
-	// TODO: Respect context cancellation in the future
 
 	// Bind parameters
 	if err := bs.bindBatchParameters(params); err != nil {
@@ -785,13 +879,19 @@ func (bs *BatchStmt) ExecContext(ctx context.Context, args []driver.NamedValue) 
 		return nil, errors.New("statement is closed")
 	}
 
+	// Check if context is already canceled
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Context is still valid, proceed
+	}
+
 	// Convert named parameters to positional for our implementation
 	params := make([]interface{}, len(args))
 	for i, arg := range args {
 		params[i] = arg.Value
 	}
-
-	// TODO: Respect context cancellation in the future
 
 	// Bind parameters
 	if err := bs.bindBatchParameters(params); err != nil {

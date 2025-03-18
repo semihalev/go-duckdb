@@ -10,9 +10,9 @@ import "C"
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"runtime"
 	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -53,6 +53,10 @@ func (pe *ParallelExtractor) ProcessInt32Columns(colIndices []int, processor fun
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(colIndices))
 
+	// Create a context with timeout to prevent hanging forever
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	for i, colIdx := range colIndices {
 		wg.Add(1)
 
@@ -63,9 +67,18 @@ func (pe *ParallelExtractor) ProcessInt32Columns(colIndices []int, processor fun
 		go func() {
 			defer wg.Done()
 
+			// Check if we should terminate early
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// Continue processing
+			}
+
 			// Process the column data
 			if err := processor(localColIdx, columns[localI], nullMasks[localI]); err != nil {
 				errChan <- fmt.Errorf("error processing column %d: %w", localColIdx, err)
+				cancel() // Signal other goroutines to stop on error
 			}
 		}()
 	}
@@ -73,12 +86,22 @@ func (pe *ParallelExtractor) ProcessInt32Columns(colIndices []int, processor fun
 	// Wait for all processing to complete
 	wg.Wait()
 
-	// Check for errors
-	select {
-	case err := <-errChan:
-		return err
-	default:
-		// No errors
+	// Check for errors - collect all errors instead of just the first one
+	var errors []error
+
+drain:
+	for {
+		select {
+		case err := <-errChan:
+			errors = append(errors, err)
+		default:
+			break drain
+		}
+	}
+
+	// If we have errors, return a combined error message
+	if len(errors) > 0 {
+		return fmt.Errorf("%d errors occurred during parallel processing. First error: %v", len(errors), errors[0])
 	}
 
 	return nil
@@ -110,6 +133,10 @@ func (pe *ParallelExtractor) ProcessInt64Columns(colIndices []int, processor fun
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(colIndices))
 
+	// Create a context with timeout to prevent hanging forever
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	for i, colIdx := range colIndices {
 		wg.Add(1)
 
@@ -120,9 +147,18 @@ func (pe *ParallelExtractor) ProcessInt64Columns(colIndices []int, processor fun
 		go func() {
 			defer wg.Done()
 
+			// Check if we should terminate early
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// Continue processing
+			}
+
 			// Process the column data
 			if err := processor(localColIdx, columns[localI], nullMasks[localI]); err != nil {
 				errChan <- fmt.Errorf("error processing column %d: %w", localColIdx, err)
+				cancel() // Signal other goroutines to stop on error
 			}
 		}()
 	}
@@ -130,12 +166,22 @@ func (pe *ParallelExtractor) ProcessInt64Columns(colIndices []int, processor fun
 	// Wait for all processing to complete
 	wg.Wait()
 
-	// Check for errors
-	select {
-	case err := <-errChan:
-		return err
-	default:
-		// No errors
+	// Check for errors - collect all errors instead of just the first one
+	var errors []error
+
+drain:
+	for {
+		select {
+		case err := <-errChan:
+			errors = append(errors, err)
+		default:
+			break drain
+		}
+	}
+
+	// If we have errors, return a combined error message
+	if len(errors) > 0 {
+		return fmt.Errorf("%d errors occurred during parallel processing. First error: %v", len(errors), errors[0])
 	}
 
 	return nil
@@ -167,6 +213,10 @@ func (pe *ParallelExtractor) ProcessFloat64Columns(colIndices []int, processor f
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(colIndices))
 
+	// Create a context with timeout to prevent hanging forever
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	for i, colIdx := range colIndices {
 		wg.Add(1)
 
@@ -177,9 +227,18 @@ func (pe *ParallelExtractor) ProcessFloat64Columns(colIndices []int, processor f
 		go func() {
 			defer wg.Done()
 
+			// Check if we should terminate early
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// Continue processing
+			}
+
 			// Process the column data
 			if err := processor(localColIdx, columns[localI], nullMasks[localI]); err != nil {
 				errChan <- fmt.Errorf("error processing column %d: %w", localColIdx, err)
+				cancel() // Signal other goroutines to stop on error
 			}
 		}()
 	}
@@ -187,12 +246,22 @@ func (pe *ParallelExtractor) ProcessFloat64Columns(colIndices []int, processor f
 	// Wait for all processing to complete
 	wg.Wait()
 
-	// Check for errors
-	select {
-	case err := <-errChan:
-		return err
-	default:
-		// No errors
+	// Check for errors - collect all errors instead of just the first one
+	var errors []error
+
+drain:
+	for {
+		select {
+		case err := <-errChan:
+			errors = append(errors, err)
+		default:
+			break drain
+		}
+	}
+
+	// If we have errors, return a combined error message
+	if len(errors) > 0 {
+		return fmt.Errorf("%d errors occurred during parallel processing. First error: %v", len(errors), errors[0])
 	}
 
 	return nil
@@ -228,6 +297,10 @@ func (pe *ParallelExtractor) ProcessParallel(
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(colIndices))
 
+	// Create a context with timeout to prevent hanging forever
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	for i, colIdx := range colIndices {
 		wg.Add(1)
 
@@ -238,9 +311,18 @@ func (pe *ParallelExtractor) ProcessParallel(
 		go func() {
 			defer wg.Done()
 
+			// Check if we should terminate early
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// Continue processing
+			}
+
 			// Process the column data
 			if err := processFn(localColIdx, values[localI], nullMasks[localI]); err != nil {
 				errChan <- fmt.Errorf("error processing column %d: %w", localColIdx, err)
+				cancel() // Signal other goroutines to stop on error
 			}
 		}()
 	}
@@ -248,12 +330,22 @@ func (pe *ParallelExtractor) ProcessParallel(
 	// Wait for all processing to complete
 	wg.Wait()
 
-	// Check for errors
-	select {
-	case err := <-errChan:
-		return err
-	default:
-		// No errors
+	// Check for errors - collect all errors instead of just the first one
+	var errors []error
+
+drain:
+	for {
+		select {
+		case err := <-errChan:
+			errors = append(errors, err)
+		default:
+			break drain
+		}
+	}
+
+	// If we have errors, return a combined error message
+	if len(errors) > 0 {
+		return fmt.Errorf("%d errors occurred during parallel processing. First error: %v", len(errors), errors[0])
 	}
 
 	return nil
@@ -262,10 +354,26 @@ func (pe *ParallelExtractor) ProcessParallel(
 // extractChunk extracts a chunk of data for a single column in a thread-safe manner
 func (pe *ParallelExtractor) extractChunk(colIdx int, startRow, endRow int) (interface{}, []bool, error) {
 	dr := pe.dr
+
+	// Acquire a read lock before accessing any DirectResult data
+	dr.mu.RLock()
+
+	// Check if result is closed
+	if dr.closed {
+		dr.mu.RUnlock()
+		return nil, nil, ErrResultClosed
+	}
+
+	// Get the column type while holding the lock
 	colType := dr.ColumnTypes()[colIdx]
 
-	// Safety check to ensure we don't go past the end of the result set
+	// Get total rows while still holding the lock
 	totalRows := int(dr.RowCount())
+
+	// We got all the info we need for validation, can release the lock
+	dr.mu.RUnlock()
+
+	// Safety check to ensure we don't go past the end of the result set
 	if startRow >= totalRows {
 		return nil, nil, fmt.Errorf("start row %d is beyond result set size %d", startRow, totalRows)
 	}
@@ -364,16 +472,24 @@ func extractInt32ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowCou
 		return nil, nil, ErrResultClosed
 	}
 
-	// Get pointers to Go slices
-	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
-	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+	// Get pointers to Go slices using a safer approach
+	// This avoids the deprecated reflect.SliceHeader approach
+	var valuesPtr unsafe.Pointer
+	var nullsPtr unsafe.Pointer
+
+	if len(values) > 0 {
+		valuesPtr = unsafe.Pointer(&values[0])
+	}
+	if len(nulls) > 0 {
+		nullsPtr = unsafe.Pointer(&nulls[0])
+	}
 
 	// Call optimized C function with proper offset
 	C.extract_int32_column(
 		dr.result,
 		C.idx_t(colIdx),
-		(*C.int32_t)(unsafe.Pointer(valuesPtr)),
-		(*C.bool)(unsafe.Pointer(nullsPtr)),
+		(*C.int32_t)(valuesPtr),
+		(*C.bool)(nullsPtr),
 		C.idx_t(startRow),
 		C.idx_t(rowCount),
 	)
@@ -420,16 +536,24 @@ func extractInt64ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowCou
 		return nil, nil, ErrResultClosed
 	}
 
-	// Get pointers to Go slices
-	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
-	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+	// Get pointers to Go slices using a safer approach
+	// This avoids the deprecated reflect.SliceHeader approach
+	var valuesPtr unsafe.Pointer
+	var nullsPtr unsafe.Pointer
+
+	if len(values) > 0 {
+		valuesPtr = unsafe.Pointer(&values[0])
+	}
+	if len(nulls) > 0 {
+		nullsPtr = unsafe.Pointer(&nulls[0])
+	}
 
 	// Call optimized C function with proper offset
 	C.extract_int64_column(
 		dr.result,
 		C.idx_t(colIdx),
-		(*C.int64_t)(unsafe.Pointer(valuesPtr)),
-		(*C.bool)(unsafe.Pointer(nullsPtr)),
+		(*C.int64_t)(valuesPtr),
+		(*C.bool)(nullsPtr),
 		C.idx_t(startRow),
 		C.idx_t(rowCount),
 	)
@@ -476,16 +600,24 @@ func extractFloat64ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowC
 		return nil, nil, ErrResultClosed
 	}
 
-	// Get pointers to Go slices
-	valuesPtr := (*reflect.SliceHeader)(unsafe.Pointer(&values)).Data
-	nullsPtr := (*reflect.SliceHeader)(unsafe.Pointer(&nulls)).Data
+	// Get pointers to Go slices using a safer approach
+	// This avoids the deprecated reflect.SliceHeader approach
+	var valuesPtr unsafe.Pointer
+	var nullsPtr unsafe.Pointer
+
+	if len(values) > 0 {
+		valuesPtr = unsafe.Pointer(&values[0])
+	}
+	if len(nulls) > 0 {
+		nullsPtr = unsafe.Pointer(&nulls[0])
+	}
 
 	// Call optimized C function with proper offset
 	C.extract_float64_column(
 		dr.result,
 		C.idx_t(colIdx),
-		(*C.double)(unsafe.Pointer(valuesPtr)),
-		(*C.bool)(unsafe.Pointer(nullsPtr)),
+		(*C.double)(valuesPtr),
+		(*C.bool)(nullsPtr),
 		C.idx_t(startRow),
 		C.idx_t(rowCount),
 	)
@@ -545,11 +677,13 @@ func (pe *ParallelExtractor) ProcessChunked(
 	errChan := make(chan error, numChunks)
 
 	// Create a safe way to terminate early if an error occurs
-	ctx, cancel := context.WithCancel(context.Background())
+	// Add a timeout of 5 minutes to prevent hanging forever
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	// Create a mutex to protect shared data
 	var processMu sync.Mutex
+	// This tracks our progress - useful for debugging but not currently used in return value
 	processedCount := 0
 
 	for chunkIdx := 0; chunkIdx < numChunks; chunkIdx++ {
@@ -652,12 +786,22 @@ func (pe *ParallelExtractor) ProcessChunked(
 	// Wait for all chunks to be processed
 	wg.Wait()
 
-	// Check for errors
-	select {
-	case err := <-errChan:
-		return err
-	default:
-		// No errors
+	// Check for errors - collect all errors instead of just the first one
+	var errors []error
+
+drain:
+	for {
+		select {
+		case err := <-errChan:
+			errors = append(errors, err)
+		default:
+			break drain
+		}
+	}
+
+	// If we have errors, wrap them all in a combined error message
+	if len(errors) > 0 {
+		return fmt.Errorf("%d errors occurred during parallel processing. First error: %v", len(errors), errors[0])
 	}
 
 	return nil
