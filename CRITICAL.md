@@ -217,7 +217,7 @@ This document highlights critical issues, unused methods, and performance bottle
 
 ✅ 1. **Fix race conditions** in buffer_pool.go, batch_query.go, and string_cache.go which could cause crashes or memory corruption.
 ✅ 2. **Address resource leaks** in connection handling and result processing (fixed in parallel_api.go, batch_query.go, and connection.go).
-3. **Optimize CGO boundary crossings** which are significant performance bottlenecks.
+🔄 3. **Optimize CGO boundary crossings** which are significant performance bottlenecks (preparation work done in batch_query.go, full optimization in progress).
 ✅ 4. **Implement proper context handling** to ensure resources are released on cancellation (fixed in batch_query.go, connection.go, and statement.go).
 5. **Reduce code duplication** through refactoring common patterns and extraction methods.
 ✅ 6. **Replace unsafe reflect.SliceHeader usage** with unsafe.Slice (Go 1.17+) to prevent future compatibility issues (fixed in parallel_api.go and rows.go).
@@ -225,7 +225,7 @@ This document highlights critical issues, unused methods, and performance bottle
 ✅ 8. **Fix unsafe empty BLOB handling** in statement.go and batch_query.go to prevent potential memory corruption.
 ✅ 9. **Add transaction support for appender** to ensure atomicity and prevent partial commits.
 10. **Add proper memory management** for native resources.
-11. **Implement batched processing** where currently using row-by-row operations.
+🔄 11. **Implement batched processing** where currently using row-by-row operations (preparation work done in batch_query.go, full implementation in progress).
 
 ## Recent Fixes (March 2025)
 
@@ -336,3 +336,15 @@ This document highlights critical issues, unused methods, and performance bottle
   - Added proper nil handling for empty slices to prevent panics
   - Improved documentation to explain the safety concerns
   - Applied consistent pattern across all column extraction methods
+
+### Performance Optimization Work (March 2025)
+
+#### Optimizations in Progress
+- 🔄 **CGO boundary crossing reduction** (batch_query.go): Preparing for major performance improvements:
+  - Added duckdb_native.h inclusion to access optimized native extraction functions
+  - Refactored INTEGER and BIGINT column extraction to prepare for batched processing
+  - Separated null value extraction for optimized column types
+  - Added detailed comments explaining the optimization approach
+  - Initial testing showed compatibility issues with optimized extraction that need further investigation
+  - Full optimization will follow in subsequent PRs with possible 5-10x performance improvements
+  - This work targets one of the most significant performance bottlenecks in the codebase
