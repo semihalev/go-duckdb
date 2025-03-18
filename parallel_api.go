@@ -634,10 +634,7 @@ func (pe *ParallelExtractor) ProcessChunked(
 		cancel()
 		parentCancel()
 		
-		// Drain error channel to prevent goroutine leaks
-		for len(errChan) > 0 {
-			<-errChan
-		}
+		// No error channel draining needed with our new approach
 	}()
 
 	// Create a mutex to protect shared data
