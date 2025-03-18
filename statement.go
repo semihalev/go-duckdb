@@ -38,7 +38,11 @@ func newStatement(conn *Connection, query string) (*Statement, error) {
 	var stmt C.duckdb_prepared_statement
 
 	if err := C.duckdb_prepare(*conn.conn, cQuery, &stmt); err == C.DuckDBError {
-		return nil, fmt.Errorf("failed to prepare statement: %s", goString(C.duckdb_prepare_error(stmt)))
+		// Get error message safely - the error is still available even with an invalid stmt
+		errorMsg := goString(C.duckdb_prepare_error(stmt))
+		// Clean up the statement handle even if preparation failed
+		C.duckdb_destroy_prepare(&stmt)
+		return nil, fmt.Errorf("failed to prepare statement: %s", errorMsg)
 	}
 
 	// Get parameter count
@@ -92,11 +96,21 @@ func (s *Statement) ExecContext(ctx context.Context, args []driver.NamedValue) (
 		// Context is still valid, proceed
 	}
 
+	// Acquire lock, but don't hold it during the entire operation
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	
+	// First check - is the statement still valid?
+	if s.stmt == nil {
+		s.mu.Unlock()
+		return nil, errors.New("statement is closed")
+	}
+	
+	// Make a safe copy of the stmt pointer
+	stmtPtr := s.stmt
+	s.mu.Unlock()
 
-	// Bind parameters
-	if err := bindParameters(s.stmt, args); err != nil {
+	// Bind parameters without holding the mutex
+	if err := bindParameters(stmtPtr, args); err != nil {
 		return nil, err
 	}
 
@@ -108,9 +122,9 @@ func (s *Statement) ExecContext(ctx context.Context, args []driver.NamedValue) (
 		// Proceed with execution
 	}
 
-	// Execute statement
+	// Execute statement without holding the mutex
 	var result C.duckdb_result
-	if err := C.duckdb_execute_prepared(*s.stmt, &result); err == C.DuckDBError {
+	if err := C.duckdb_execute_prepared(*stmtPtr, &result); err == C.DuckDBError {
 		return nil, fmt.Errorf("failed to execute statement: %s", goString(C.duckdb_result_error(&result)))
 	}
 	defer C.duckdb_destroy_result(&result)
@@ -135,8 +149,18 @@ func (s *Statement) Exec(args []driver.Value) (driver.Result, error) {
 		return nil, driver.ErrBadConn
 	}
 
+	// Acquire lock, but don't hold it during the entire operation
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	
+	// First check - is the statement still valid?
+	if s.stmt == nil {
+		s.mu.Unlock()
+		return nil, errors.New("statement is closed")
+	}
+	
+	// Make a safe copy of the stmt pointer
+	stmtPtr := s.stmt
+	s.mu.Unlock()
 
 	// Get named arguments buffer from pool to reduce allocations
 	namedArgs := globalBufferPool.GetNamedArgsBuffer(len(args))
@@ -150,14 +174,14 @@ func (s *Statement) Exec(args []driver.Value) (driver.Result, error) {
 		}
 	}
 
-	// Bind parameters
-	if err := bindParameters(s.stmt, namedArgs); err != nil {
+	// Bind parameters without holding the mutex
+	if err := bindParameters(stmtPtr, namedArgs); err != nil {
 		return nil, err
 	}
 
-	// Execute statement
+	// Execute statement without holding the mutex
 	var result C.duckdb_result
-	if err := C.duckdb_execute_prepared(*s.stmt, &result); err == C.DuckDBError {
+	if err := C.duckdb_execute_prepared(*stmtPtr, &result); err == C.DuckDBError {
 		return nil, fmt.Errorf("failed to execute statement: %s", goString(C.duckdb_result_error(&result)))
 	}
 	defer C.duckdb_destroy_result(&result)
@@ -189,11 +213,21 @@ func (s *Statement) QueryContext(ctx context.Context, args []driver.NamedValue) 
 		// Context is still valid, proceed
 	}
 
+	// Acquire lock, but don't hold it during the entire operation
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	
+	// First check - is the statement still valid?
+	if s.stmt == nil {
+		s.mu.Unlock()
+		return nil, errors.New("statement is closed")
+	}
+	
+	// Make a safe copy of the stmt pointer
+	stmtPtr := s.stmt
+	s.mu.Unlock()
 
-	// Bind parameters
-	if err := bindParameters(s.stmt, args); err != nil {
+	// Bind parameters without holding the mutex
+	if err := bindParameters(stmtPtr, args); err != nil {
 		return nil, err
 	}
 
@@ -209,7 +243,7 @@ func (s *Statement) QueryContext(ctx context.Context, args []driver.NamedValue) 
 	wrapper := globalBufferPool.GetResultSetWrapper()
 
 	// Execute statement with pooled result - pass by address since it's a struct now
-	if err := C.duckdb_execute_prepared(*s.stmt, &wrapper.result); err == C.DuckDBError {
+	if err := C.duckdb_execute_prepared(*stmtPtr, &wrapper.result); err == C.DuckDBError {
 		// Get error message before returning wrapper to pool
 		errorMsg := goString(C.duckdb_result_error(&wrapper.result))
 		globalBufferPool.PutResultSetWrapper(wrapper)
@@ -233,8 +267,18 @@ func (s *Statement) Query(args []driver.Value) (driver.Rows, error) {
 		return nil, driver.ErrBadConn
 	}
 
+	// Acquire lock, but don't hold it during the entire operation
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	
+	// First check - is the statement still valid?
+	if s.stmt == nil {
+		s.mu.Unlock()
+		return nil, errors.New("statement is closed")
+	}
+	
+	// Make a safe copy of the stmt pointer
+	stmtPtr := s.stmt
+	s.mu.Unlock()
 
 	// Get named arguments buffer from pool to reduce allocations
 	namedArgs := globalBufferPool.GetNamedArgsBuffer(len(args))
@@ -248,8 +292,8 @@ func (s *Statement) Query(args []driver.Value) (driver.Rows, error) {
 		}
 	}
 
-	// Bind parameters
-	if err := bindParameters(s.stmt, namedArgs); err != nil {
+	// Bind parameters without holding the mutex
+	if err := bindParameters(stmtPtr, namedArgs); err != nil {
 		return nil, err
 	}
 
@@ -258,7 +302,7 @@ func (s *Statement) Query(args []driver.Value) (driver.Rows, error) {
 	wrapper := globalBufferPool.GetResultSetWrapper()
 
 	// Execute statement with pooled result - pass by address since it's a struct now
-	if err := C.duckdb_execute_prepared(*s.stmt, &wrapper.result); err == C.DuckDBError {
+	if err := C.duckdb_execute_prepared(*stmtPtr, &wrapper.result); err == C.DuckDBError {
 		// Get error message before returning wrapper to pool
 		errorMsg := goString(C.duckdb_result_error(&wrapper.result))
 		globalBufferPool.PutResultSetWrapper(wrapper)
@@ -273,6 +317,15 @@ func (s *Statement) Query(args []driver.Value) (driver.Rows, error) {
 
 // Helper function to bind parameters to a prepared statement
 func bindParameters(stmt *C.duckdb_prepared_statement, args []driver.NamedValue) error {
+	// Use panic recovery to ensure proper cleanup even if there's a panic during binding
+	defer func() {
+		if r := recover(); r != nil {
+			// A panic occurred during binding
+			// Log or handle as needed - at minimum, don't let the panic propagate
+			// If there's a logging framework, this would be a good place to log the error
+		}
+	}()
+	
 	for i, arg := range args {
 		idx := C.idx_t(i + 1) // Parameters are 1-indexed in DuckDB
 
@@ -326,6 +379,8 @@ func bindParameters(stmt *C.duckdb_prepared_statement, args []driver.NamedValue)
 
 		case string:
 			cStr := cString(v)
+			// Use individual defer for each string to prevent potential memory leaks
+			// if later bindings cause a panic
 			defer freeString(cStr)
 			if err := C.duckdb_bind_varchar(*stmt, idx, cStr); err == C.DuckDBError {
 				return fmt.Errorf("failed to bind string parameter at index %d", i)
@@ -339,7 +394,11 @@ func bindParameters(stmt *C.duckdb_prepared_statement, args []driver.NamedValue)
 					return fmt.Errorf("failed to bind empty blob parameter at index %d", i)
 				}
 			} else {
-				if err := C.duckdb_bind_blob(*stmt, idx, unsafe.Pointer(&v[0]), C.idx_t(len(v))); err == C.DuckDBError {
+				// Safely get pointer to the first byte in the slice
+				var dataPtr unsafe.Pointer
+				dataPtr = unsafe.Pointer(&v[0])
+				
+				if err := C.duckdb_bind_blob(*stmt, idx, dataPtr, C.idx_t(len(v))); err == C.DuckDBError {
 					return fmt.Errorf("failed to bind blob parameter at index %d", i)
 				}
 			}

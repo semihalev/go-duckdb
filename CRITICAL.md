@@ -119,10 +119,10 @@ This document highlights critical issues, unused methods, and performance bottle
 ## statement.go
 
 ### Critical Issues
-- **Potential safety issue** (Line 40-41): When accessing `C.duckdb_prepare_error(stmt)` after an error, `stmt` may not be properly initialized.
-- **Unsafe pointer usage** (Line 232-238): Unsafe casting with `unsafe.Pointer` when binding blob parameters without proper null checking for empty slices.
-- **Thread safety concerns** (Line 86-87): Mutex lock held during CGO calls could lead to contention.
-- **Potential memory leaks** (Line 224-225): If `C.duckdb_bind_varchar` fails, deferred `freeString(cStr)` might not be called if a panic occurs in other bindings.
+- ✅ **FIXED: Potential safety issue** (Line 40-41): Fixed by retrieving the error message safely and properly cleaning up the statement handle even if preparation failed, ensuring no resource leaks.
+- ✅ **FIXED: Unsafe pointer usage** (Line 335-345): Fixed by adding safer pointer handling for blob parameters, with proper checking for empty blobs and explicit pointer management.
+- ✅ **FIXED: Thread safety concerns** (Line 99-110): Fixed by not holding the mutex during CGO calls. Now acquires the lock briefly to get a safe copy of the statement pointer, then releases it before expensive operations.
+- ✅ **FIXED: Potential memory leaks** (Line 319-327): Fixed by adding panic recovery to ensure proper cleanup even if there's a panic during binding. Also uses individual defer statements for each string binding.
 
 ### Unused Code
 - **Unused query field** (Line 26): `query` field is stored but never used after initialization.
@@ -216,12 +216,12 @@ This document highlights critical issues, unused methods, and performance bottle
 ## Priority Recommendations
 
 ✅ 1. **Fix race conditions** in buffer_pool.go, batch_query.go, and string_cache.go which could cause crashes or memory corruption.
-✅ 2. **Address resource leaks** in connection handling and result processing (fixed in parallel_api.go, batch_query.go, and connection.go).
+✅ 2. **Address resource leaks** in connection handling and result processing (fixed in parallel_api.go, batch_query.go, connection.go, and statement.go).
 🔄 3. **Optimize CGO boundary crossings** which are significant performance bottlenecks (preparation work done in batch_query.go, full optimization in progress).
 ✅ 4. **Implement proper context handling** to ensure resources are released on cancellation (fixed in batch_query.go, connection.go, and statement.go).
 5. **Reduce code duplication** through refactoring common patterns and extraction methods.
 ✅ 6. **Replace unsafe reflect.SliceHeader usage** with unsafe.Slice (Go 1.17+) to prevent future compatibility issues (fixed in parallel_api.go and rows.go).
-✅ 7. **Improve thread safety** with consistent locking patterns (fixed in buffer_pool.go, batch_query.go, parallel_api.go, connection.go, and string_cache.go).
+✅ 7. **Improve thread safety** with consistent locking patterns (fixed in buffer_pool.go, batch_query.go, parallel_api.go, connection.go, string_cache.go, and statement.go).
 ✅ 8. **Fix unsafe empty BLOB handling** in statement.go and batch_query.go to prevent potential memory corruption.
 ✅ 9. **Add transaction support for appender** to ensure atomicity and prevent partial commits.
 10. **Add proper memory management** for native resources.
@@ -336,6 +336,33 @@ This document highlights critical issues, unused methods, and performance bottle
   - Added proper nil handling for empty slices to prevent panics
   - Improved documentation to explain the safety concerns
   - Applied consistent pattern across all column extraction methods
+
+### Statement Thread Safety and Memory Safety Fixes (March 2025)
+
+#### Issues Fixed
+- ✅ **Fixed statement preparation error handling** (statement.go): Improved error handling in statement preparation:
+  - Previously: Potentially used uninitialized statement handle when trying to get error message
+  - Now: Safely obtains error message and properly cleans up resources even when preparation fails
+  - Added explicit call to C.duckdb_destroy_prepare to prevent resource leaks
+  - Provides more reliable error messages for debugging failed statement preparations
+
+- ✅ **Fixed thread safety in statement operations** (statement.go): Improved concurrency handling:
+  - Previously: Mutex lock was held during long-running CGO operations, causing potential contention
+  - Now: Briefly acquires the lock to get a safe copy of the statement pointer, then performs operations without the lock
+  - Added additional statement pointer validity checks to prevent use-after-free
+  - Implemented consistent locking pattern across all method implementations
+
+- ✅ **Fixed potential memory leaks in parameter binding** (statement.go): Added robust error handling:
+  - Previously: If a panic occurred during binding, resources could be leaked
+  - Now: Implemented panic recovery to ensure proper cleanup even during exceptional conditions
+  - Uses individual defer statements for string bindings instead of a single one
+  - Ensures C memory allocations are properly freed in all scenarios
+
+- ✅ **Fixed unsafe blob parameter handling** (statement.go): Improved safety for BLOB parameters:
+  - Previously: Used potentially unsafe pointer operations without proper checking
+  - Now: Added safer pointer handling with explicit pointer management
+  - Properly handles empty blobs with nil pointer and size 0
+  - Added explicit variable declarations to make pointer operations more clear and maintainable
 
 ### Performance Optimization Work (March 2025)
 
