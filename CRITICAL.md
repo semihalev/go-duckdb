@@ -85,9 +85,9 @@ This document highlights critical issues, unused methods, and performance bottle
 ## connection.go
 
 ### Critical Issues
-- **Context handling issues** (Lines 128-139, 322-382): The context parameter in PrepareContext, QueryContext, and ExecContext is not properly respected for cancellation.
-- **Unclear locking strategy** (Lines 445-476): QueryDirectResult locks during preparation but unlocks before query execution, inconsistent with ExecContext and QueryContext which maintain the lock during execution.
-- **Resource leak risk** (Lines 703-719): BatchExec creates and closes a statement but doesn't handle context cancellation. If context is canceled between prepare and execute, resources may not be properly released.
+- ✅ **FIXED: Context handling issues** (Lines 128-139, 322-382): Fixed by adding proper context cancellation checks in PrepareContext, QueryContext, and ExecContext to respect context cancellation.
+- ✅ **FIXED: Unclear locking strategy** (Lines 445-476): Fixed QueryDirectResult to maintain the lock during the entire operation, consistent with ExecContext and QueryContext.
+- ✅ **FIXED: Resource leak risk** (Lines 703-719): Added a new BatchExecContext method with proper context support and implemented context checks at multiple points in batch execution.
 
 ### Performance Bottlenecks
 - **Code duplication** (Lines 141-207, 322-382): ExecContext and QueryContext have identical parameter binding and execution code paths with different return handling.
@@ -213,11 +213,11 @@ This document highlights critical issues, unused methods, and performance bottle
 ## Priority Recommendations
 
 ✅ 1. **Fix race conditions** in buffer_pool.go, batch_query.go (fixed), and string_cache.go which could cause crashes or memory corruption.
-✅ 2. **Address resource leaks** in connection handling and result processing (fixed in parallel_api.go and batch_query.go).
+✅ 2. **Address resource leaks** in connection handling and result processing (fixed in parallel_api.go, batch_query.go, and connection.go).
 3. **Optimize CGO boundary crossings** which are significant performance bottlenecks.
-✅ 4. **Implement proper context handling** to ensure resources are released on cancellation (fixed in batch_query.go, still needed in connection.go).
+✅ 4. **Implement proper context handling** to ensure resources are released on cancellation (fixed in batch_query.go and connection.go).
 5. **Reduce code duplication** through refactoring common patterns and extraction methods.
 ✅ 6. **Replace unsafe reflect.SliceHeader usage** with unsafe.Slice (Go 1.17+) to prevent future compatibility issues (fixed in parallel_api.go, still needed in rows.go).
-✅ 7. **Improve thread safety** with consistent locking patterns (fixed in buffer_pool.go, batch_query.go, parallel_api.go).
+✅ 7. **Improve thread safety** with consistent locking patterns (fixed in buffer_pool.go, batch_query.go, parallel_api.go, and connection.go).
 8. **Add proper memory management** for native resources.
 9. **Implement batched processing** where currently using row-by-row operations.
