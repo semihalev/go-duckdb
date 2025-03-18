@@ -680,24 +680,3 @@ func BenchmarkBatchVsIndividual(b *testing.B) {
 		}
 	}
 }
-
-// BenchmarkStringPreparationCost shows how much of the benchmark overhead comes from string preparation
-func BenchmarkStringPreparationCost(b *testing.B) {
-	// Benchmark just the string preparation to see how much overhead it adds
-	for _, count := range []int{10, 100, 1000, 10000} {
-		b.Run(fmt.Sprintf("StringFormat_%d", count), func(b *testing.B) {
-			b.ReportAllocs()
-
-			for i := 0; i < b.N; i++ {
-				strings := make([]string, count)
-				for j := 0; j < count; j++ {
-					strings[j] = fmt.Sprintf("name-%d", j)
-				}
-				// Force Go not to optimize away the strings
-				if len(strings[0]) == 0 {
-					b.Fatal("String should not be empty")
-				}
-			}
-		})
-	}
-}

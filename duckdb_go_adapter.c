@@ -819,6 +819,9 @@ param_batch_t* create_param_batch(int32_t param_count, int32_t batch_size) {
         return NULL;
     }
     
+    // Store the resources capacity
+    batch->resource_capacity = resources_size;
+    
     // Add allocated arrays to resources for cleanup
     batch->resources[0] = batch->null_flags;
     batch->resources[1] = batch->param_types;
@@ -834,22 +837,10 @@ param_batch_t* create_param_batch(int32_t param_count, int32_t batch_size) {
 static int ensure_param_batch_resource_capacity(param_batch_t* batch) {
     if (!batch) return 0;
     
-    // Calculate current size and remaining capacity
-    int32_t min_capacity = batch->param_count * 3 + 20; // Should match initial allocation
-    
     // If we're running low on capacity (less than 10 slots), expand
-    if (min_capacity - batch->resource_count < 10) {
-        // Calculate new size based on current resource count rather than estimated size
-        // This handles cases where we've allocated more resources than initially estimated
-        int32_t current_allocation = (batch->resources != NULL) ? 
-                                     min_capacity : 0;
-        int32_t new_size = current_allocation > 0 ? 
-                           current_allocation * 2 : min_capacity * 2;
-        
-        // Make sure we have at least min_capacity * 2
-        if (new_size < min_capacity * 2) {
-            new_size = min_capacity * 2;
-        }
+    if (batch->resource_capacity - batch->resource_count < 10) {
+        // Double the current capacity for the new size
+        int32_t new_size = batch->resource_capacity * 2;
         
         // Reallocate with larger size
         void** new_resources = realloc(batch->resources, new_size * sizeof(void*));
@@ -861,8 +852,9 @@ static int ensure_param_batch_resource_capacity(param_batch_t* batch) {
         memset(new_resources + batch->resource_count, 0, 
                (new_size - batch->resource_count) * sizeof(void*));
         
-        // Update the resources pointer
+        // Update the resources pointer and capacity
         batch->resources = new_resources;
+        batch->resource_capacity = new_size;
     }
     
     return 1;

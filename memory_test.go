@@ -83,7 +83,7 @@ func TestMemoryManagement(t *testing.T) {
 	// (allows for some finalizers that haven't run yet)
 	// Under high stress, we allow a higher threshold since finalizers might be delayed
 	getsPuts := int64(resultBufferPool.gets) - int64(resultBufferPool.puts)
-	
+
 	// Allow for higher threshold - in CI environments finalizers might be slow to run
 	// Base allowance is 40% of gets, capped at 1000
 	maxUnbalanced := int64(float64(resultBufferPool.gets) * 0.40)
@@ -93,7 +93,7 @@ func TestMemoryManagement(t *testing.T) {
 	if maxUnbalanced > 1000 {
 		maxUnbalanced = 1000 // Cap for very large tests
 	}
-	
+
 	if getsPuts > maxUnbalanced {
 		t.Errorf("Too many unbalanced gets vs puts: %d gets, %d puts, difference: %d (max allowed: %d)",
 			resultBufferPool.gets, resultBufferPool.puts, getsPuts, maxUnbalanced)
@@ -119,7 +119,7 @@ func TestMemoryManagement(t *testing.T) {
 	}
 
 	if reuseRate > maxMissRate {
-		t.Errorf("Poor buffer reuse rate: %.2f%% misses (max allowed: %.2f%%)", 
+		t.Errorf("Poor buffer reuse rate: %.2f%% misses (max allowed: %.2f%%)",
 			reuseRate*100, maxMissRate*100)
 	} else {
 		t.Logf("Buffer reuse rate is acceptable: %.2f%% misses (max allowed: %.2f%%)",

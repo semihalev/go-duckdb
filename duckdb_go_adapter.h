@@ -8,6 +8,15 @@
 #include <stdint.h>
 #include "include/duckdb.h"
 
+// String cache structure for efficient string handling
+typedef struct {
+    char** entries;         // Array of string pointers
+    int32_t* hashes;        // Hash values for quick lookup
+    int32_t capacity;       // Total capacity of the cache
+    int32_t size;           // Current number of entries
+    int32_t* ref_counts;    // Reference counting for entries
+} string_cache_t;
+
 // Column metadata structure
 typedef struct {
     char* name;
@@ -95,6 +104,7 @@ typedef struct {
     // Resources for cleanup
     void** resources;        // Pointers to allocated resources
     int32_t resource_count;  // Count of resources
+    int32_t resource_capacity; // Capacity of resources array
 } param_batch_t;
 
 // Execute a query and store the entire result set in a single operation
@@ -123,5 +133,18 @@ void free_result_buffer(result_buffer_t* buffer);
 // Reference counting functions for safer resource management
 void increase_buffer_ref(result_buffer_t* buffer);
 void decrease_buffer_ref(result_buffer_t* buffer);
+
+// String cache management functions
+string_cache_t* create_string_cache(int32_t capacity);
+void free_string_cache(string_cache_t* cache);
+
+// Optimized batch string extraction
+int extract_string_column_batch(duckdb_result* result, 
+                               int32_t col_idx,
+                               int64_t start_row,
+                               int64_t batch_size,
+                               void* null_map,
+                               char*** string_data,
+                               string_cache_t* string_cache);
 
 #endif /* DUCKDB_GO_ADAPTER_H */

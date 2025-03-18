@@ -179,7 +179,9 @@ func (c *Connection) ExecContext(ctx context.Context, query string, args []drive
 
 			// Execute statement
 			if err := C.duckdb_execute_prepared(stmt, &result); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to execute statement: %s", goString(C.duckdb_result_error(&result)))
+				errMsg := goString(C.duckdb_result_error(&result))
+				C.duckdb_destroy_result(&result)
+				return nil, fmt.Errorf("failed to execute statement: %s", errMsg)
 			}
 		} else {
 			// Direct query without parameters
@@ -187,7 +189,9 @@ func (c *Connection) ExecContext(ctx context.Context, query string, args []drive
 			defer freeString(cQuery)
 
 			if err := C.duckdb_query(*c.conn, cQuery, &result); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to execute query: %s", goString(C.duckdb_result_error(&result)))
+				errMsg := goString(C.duckdb_result_error(&result))
+				C.duckdb_destroy_result(&result)
+				return nil, fmt.Errorf("failed to execute query: %s", errMsg)
 			}
 		}
 
@@ -356,7 +360,9 @@ func (c *Connection) QueryContext(ctx context.Context, query string, args []driv
 
 			// Execute statement
 			if err := C.duckdb_execute_prepared(stmt, &result); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to execute statement: %s", goString(C.duckdb_result_error(&result)))
+				errMsg := goString(C.duckdb_result_error(&result))
+				C.duckdb_destroy_result(&result)
+				return nil, fmt.Errorf("failed to execute statement: %s", errMsg)
 			}
 		} else {
 			// Direct query without parameters
@@ -364,7 +370,9 @@ func (c *Connection) QueryContext(ctx context.Context, query string, args []driv
 			defer freeString(cQuery)
 
 			if err := C.duckdb_query(*c.conn, cQuery, &result); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to execute query: %s", goString(C.duckdb_result_error(&result)))
+				errMsg := goString(C.duckdb_result_error(&result))
+				C.duckdb_destroy_result(&result)
+				return nil, fmt.Errorf("failed to execute query: %s", errMsg)
 			}
 		}
 
@@ -442,12 +450,20 @@ func (c *Connection) QueryDirectResult(query string) (*DirectResult, error) {
 		return nil, ErrConnectionClosed
 	}
 
+	// Only lock during the preparation and parameter binding phase
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	if atomic.LoadInt32(&c.closed) != 0 {
+		c.mu.Unlock()
+		return nil, ErrConnectionClosed
+	}
 
+	// Convert query to C string (under lock to protect from concurrent frees)
 	cQuery := cString(query)
+	c.mu.Unlock() // Release lock before the actual query execution
+
 	defer freeString(cQuery)
 
+	// Execute query without holding the connection lock
 	var result C.duckdb_result
 	if err := C.duckdb_query(*c.conn, cQuery, &result); err == C.DuckDBError {
 		errMsg := C.GoString(C.duckdb_result_error(&result))

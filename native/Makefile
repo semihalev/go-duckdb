@@ -31,7 +31,7 @@ else ifeq ($(UNAME_M),aarch64)
     ARCH=arm64
 endif
 
-LIB_NAME=libduckdbnative$(EXT)
+LIB_NAME=libduckdbnative_shim$(EXT)
 LIB_DIR=../lib/$(PLATFORM)/$(ARCH)
 
 all: $(LIB_NAME)

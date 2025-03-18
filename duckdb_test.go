@@ -673,16 +673,16 @@ func TestAppender(t *testing.T) {
 
 	// Get a fixed timestamp for testing
 	baseTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
-	
+
 	// Append some rows
 	numRows := 10
 	for i := 0; i < numRows; i++ {
 		// Use various types to test the appender thoroughly
 		err := appender.AppendRow(
-			int32(i),                                // id (INTEGER)
-			"Name-"+string(rune('0'+i)),            // name (VARCHAR)
-			float64(i) + 0.5,                       // value (DOUBLE)
-			(i % 2) == 0,                           // flag (BOOLEAN) - even IDs are true
+			int32(i),                    // id (INTEGER)
+			"Name-"+string(rune('0'+i)), // name (VARCHAR)
+			float64(i)+0.5,              // value (DOUBLE)
+			(i%2) == 0,                  // flag (BOOLEAN) - even IDs are true
 			baseTime.Add(time.Duration(i)*time.Hour), // created (TIMESTAMP)
 		)
 		if err != nil {
@@ -805,7 +805,7 @@ func TestAppender(t *testing.T) {
 			t.Errorf("Row %d: Failed to query boolean value: %v", i, err)
 			continue
 		}
-		
+
 		// Extract as int32 to avoid CGO bool conversion issues
 		boolInts, nullBools, err := boolResult.ExtractInt32Column(0)
 		if err != nil {
@@ -814,12 +814,12 @@ func TestAppender(t *testing.T) {
 			continue
 		}
 		boolResult.Close()
-		
+
 		if len(boolInts) == 0 || nullBools[0] {
 			t.Errorf("Row %d: Missing or NULL flag", i)
 			continue
 		}
-		
+
 		actualFlag := boolInts[0] != 0
 		if expectedFlag != actualFlag {
 			t.Errorf("Row %d: Expected flag %v, got %v", i, expectedFlag, actualFlag)
@@ -832,7 +832,7 @@ func TestAppender(t *testing.T) {
 			t.Errorf("Row %d: Failed to query timestamp value: %v", i, err)
 			continue
 		}
-		
+
 		// Extract as string to avoid direct timestamp comparison issues
 		timeStrs, nullTimes, err := timeResult.ExtractStringColumn(0)
 		if err != nil {
@@ -841,12 +841,12 @@ func TestAppender(t *testing.T) {
 			continue
 		}
 		timeResult.Close()
-		
+
 		if len(timeStrs) == 0 || nullTimes[0] {
 			t.Errorf("Row %d: Missing or NULL timestamp", i)
 			continue
 		}
-		
+
 		// Parse the timestamp string
 		// The format may vary based on DuckDB settings, but it should be consistent
 		parsedTime, err := time.Parse("2006-01-02 15:04:05", timeStrs[0])
@@ -854,7 +854,7 @@ func TestAppender(t *testing.T) {
 			t.Errorf("Row %d: Failed to parse timestamp string '%s': %v", i, timeStrs[0], err)
 			continue
 		}
-		
+
 		// Compare the parsed time with the expected time (only compare to minute precision to avoid issues)
 		expectedFmt := expectedTime.UTC().Format("2006-01-02 15:04")
 		actualFmt := parsedTime.UTC().Format("2006-01-02 15:04")
@@ -916,27 +916,27 @@ func TestAppender(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract null values: %v", err)
 	}
-	
+
 	// Use a direct query to check for NULL values in the database
 	countNullsQuery := "SELECT COUNT(*) FROM test_appender WHERE id = 100 AND flag IS NULL AND created IS NULL"
 	countResult, err := conn.QueryDirectResult(countNullsQuery)
 	if err != nil {
 		t.Fatalf("Failed to query NULL count: %v", err)
 	}
-	
+
 	// Extract count value
 	countValues, _, err := countResult.ExtractInt64Column(0)
 	if err != nil {
 		t.Fatalf("Failed to extract NULL count: %v", err)
 	}
 	countResult.Close()
-	
+
 	// This should be 1 if both flag and created are NULL
 	nullCount := int64(0)
 	if len(countValues) > 0 {
 		nullCount = countValues[0]
 	}
-	
+
 	// For compatibility with the rest of the test code
 	flagNullVals := []bool{nullCount == 1}
 	tsNullVals := []bool{nullCount == 1}

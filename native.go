@@ -32,7 +32,7 @@ var (
 	funcExtractBlobColumn      unsafe.Pointer
 	funcFilterInt32ColumnGt    unsafe.Pointer
 	funcExtractRowBatch        unsafe.Pointer
-	
+
 	// Reserved for future optimizations
 )
 
@@ -131,7 +131,6 @@ func findNativeLibraryPath() string {
 	// Try all paths
 	for _, path := range searchPaths {
 		if _, err := os.Stat(path); err == nil {
-			fmt.Printf("Found native library at: %s\n", path)
 			return path
 		}
 	}

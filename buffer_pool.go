@@ -148,7 +148,7 @@ func (p *BufferPool) Stats() map[string]uint64 {
 // This is only used for testing mutex behavior and should not be called in production code
 func (p *BufferPool) TestGetBuffer() *C.result_buffer_t {
 	atomic.AddUint64(&p.gets, 1)
-	
+
 	// Get buffer from pool without any mutex protection for testing race conditions
 	buffer := p.buffers.Get().(*C.result_buffer_t)
 

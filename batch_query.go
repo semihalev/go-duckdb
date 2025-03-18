@@ -46,7 +46,7 @@ type BatchQuery struct {
 
 	// Temporary buffer for conversions
 	buffer []byte
-	
+
 	// Mutex for thread safety
 	mu sync.Mutex
 }
@@ -76,7 +76,7 @@ type ColumnVector struct {
 	stringData  []string
 	blobData    [][]byte
 	timeData    []interface{} // For timestamp, date, time
-	
+
 	// String cache for efficient string handling
 	stringCache *StringCache
 }
@@ -234,7 +234,7 @@ func (bq *BatchQuery) fetchNextBatch() bool {
 	// Acquire lock to ensure thread safety when modifying state
 	bq.mu.Lock()
 	defer bq.mu.Unlock()
-	
+
 	// Check if we're at the end of results
 	if bq.currentRow >= bq.rowCount {
 		bq.batchAvailable = 0
@@ -363,7 +363,7 @@ func (bq *BatchQuery) extractColumnBatch(columnIdx int, startRow int, batchSize 
 		if vector.stringCache == nil {
 			vector.stringCache = NewStringCache(bq.columnCount)
 		}
-		
+
 		// Extract all strings with batched/cached approach
 		for i := 0; i < batchSize; i++ {
 			if !vector.nullMap[i] {
@@ -379,7 +379,7 @@ func (bq *BatchQuery) extractColumnBatch(columnIdx int, startRow int, batchSize 
 				}
 			}
 		}
-		
+
 		// Check if we should reset the string cache based on hit/miss stats
 		hits, misses, _ := vector.stringCache.Stats()
 		if hits+misses > 100000 && float64(hits)/float64(hits+misses) < 0.5 {

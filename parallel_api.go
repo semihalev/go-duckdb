@@ -52,15 +52,11 @@ func (pe *ParallelExtractor) ProcessInt32Columns(colIndices []int, processor fun
 
 	// Then process the extracted data in parallel
 	var wg sync.WaitGroup
-	
-	// We don't need a buffered error channel with our errOnce approach
-	// Initialize it for consistent code structure but don't use it
-	_ = make(chan error, len(colIndices)+1)
-	
+
 	// Create a context with cancellation to ensure goroutines can be stopped
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Ensure context is cancelled when we're done
-	
+
 	// Keep track of the first error
 	var processingErr error
 	var errOnce sync.Once
@@ -74,7 +70,7 @@ func (pe *ParallelExtractor) ProcessInt32Columns(colIndices []int, processor fun
 
 		go func() {
 			defer wg.Done()
-			
+
 			// Check if we should stop
 			select {
 			case <-ctx.Done():
@@ -128,15 +124,11 @@ func (pe *ParallelExtractor) ProcessInt64Columns(colIndices []int, processor fun
 
 	// Then process the extracted data in parallel
 	var wg sync.WaitGroup
-	
-	// We don't need a buffered error channel with our errOnce approach
-	// Initialize it for consistent code structure but don't use it
-	_ = make(chan error, len(colIndices)+1)
-	
+
 	// Create a context with cancellation to ensure goroutines can be stopped
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Ensure context is cancelled when we're done
-	
+
 	// Keep track of the first error
 	var processingErr error
 	var errOnce sync.Once
@@ -150,7 +142,7 @@ func (pe *ParallelExtractor) ProcessInt64Columns(colIndices []int, processor fun
 
 		go func() {
 			defer wg.Done()
-			
+
 			// Check if we should stop
 			select {
 			case <-ctx.Done():
@@ -204,15 +196,11 @@ func (pe *ParallelExtractor) ProcessFloat64Columns(colIndices []int, processor f
 
 	// Then process the extracted data in parallel
 	var wg sync.WaitGroup
-	
-	// We don't need a buffered error channel with our errOnce approach
-	// Initialize it for consistent code structure but don't use it
-	_ = make(chan error, len(colIndices)+1)
-	
+
 	// Create a context with cancellation to ensure goroutines can be stopped
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Ensure context is cancelled when we're done
-	
+
 	// Keep track of the first error
 	var processingErr error
 	var errOnce sync.Once
@@ -226,7 +214,7 @@ func (pe *ParallelExtractor) ProcessFloat64Columns(colIndices []int, processor f
 
 		go func() {
 			defer wg.Done()
-			
+
 			// Check if we should stop
 			select {
 			case <-ctx.Done():
@@ -284,15 +272,11 @@ func (pe *ParallelExtractor) ProcessParallel(
 
 	// Then process the extracted data in parallel
 	var wg sync.WaitGroup
-	
-	// We don't need a buffered error channel with our errOnce approach
-	// Initialize it for consistent code structure but don't use it
-	_ = make(chan error, len(colIndices)+1)
-	
+
 	// Create a context with cancellation to ensure goroutines can be stopped
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Ensure context is cancelled when we're done
-	
+
 	// Keep track of the first error
 	var processingErr error
 	var errOnce sync.Once
@@ -306,7 +290,7 @@ func (pe *ParallelExtractor) ProcessParallel(
 
 		go func() {
 			defer wg.Done()
-			
+
 			// Check if we should stop
 			select {
 			case <-ctx.Done():
@@ -619,21 +603,17 @@ func (pe *ParallelExtractor) ProcessChunked(
 	sem := make(chan struct{}, maxParallel)
 
 	var wg sync.WaitGroup
-	
-	// Buffered error channel is no longer needed since we use errOnce and processingErr
-	// But we'll create it and ignore it for code consistency and potential debugging
-	_ = make(chan error, numChunks+1)
-	
+
 	// Create a safe way to terminate early if an error occurs
 	// Use a parent context with timeout to prevent any possibility of leaked goroutines
 	parentCtx, parentCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	ctx, cancel := context.WithCancel(parentCtx)
-	
+
 	// Always clean up contexts when we're done
 	defer func() {
 		cancel()
 		parentCancel()
-		
+
 		// No error channel draining needed with our new approach
 	}()
 
@@ -654,7 +634,7 @@ func (pe *ParallelExtractor) ProcessChunked(
 		go func() {
 			// Use defer for cleanup to ensure it happens even in case of panic
 			defer wg.Done()
-			
+
 			// Acquire semaphore slot
 			select {
 			case sem <- struct{}{}:
