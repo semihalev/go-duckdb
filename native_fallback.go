@@ -135,6 +135,16 @@ func FallbackExtractBoolColumn(result uintptr, colIdx int, outBuffer []bool, nul
 }
 
 // FallbackExtractStringColumnPtrs implements a pure Go version of ExtractStringColumnPtrs
+//
+// Note on memory management:
+// This function internally calls duckdb_value_varchar which allocates memory
+// that needs to be freed with duckdb_free. The caller MUST call duckdb_free on 
+// each non-nil pointer in outPtrs after use to prevent memory leaks.
+// 
+// Typically this is done in the higher-level extraction function, for example:
+//   1. Results.Release() for ZeroCopyResult
+//   2. StringTable.Release() for GlobalStringTable
+//   3. Explicit C.duckdb_free() calls in non-zero-copy extractors
 func FallbackExtractStringColumnPtrs(result uintptr, colIdx int, outPtrs []*byte, outLens []int32, nullMask []bool, startRow, rowCount int) {
 	// Don't process anything if parameters are invalid
 	if result == 0 || len(outPtrs) < rowCount || len(outLens) < rowCount || len(nullMask) < rowCount {
@@ -154,7 +164,7 @@ func FallbackExtractStringColumnPtrs(result uintptr, colIdx int, outPtrs []*byte
 			strVal := duckdbValueVarchar(result, colIdx, rowIdx)
 			if strVal != nil {
 				outPtrs[i] = strVal
-				// Calculate length
+				// Calculate length with safety bounds
 				outLens[i] = int32(cStrLen(strVal))
 			} else {
 				outPtrs[i] = nil
@@ -262,6 +272,8 @@ func duckdbValueBool(result uintptr, col, row int) bool {
 }
 
 // duckdbValueVarchar retrieves a string value from the result set
+// IMPORTANT: The memory allocated by this function must be freed using C.duckdb_free
+// or it will leak. The caller is responsible for ensuring this happens.
 func duckdbValueVarchar(result uintptr, col, row int) *byte {
 	if result == 0 {
 		// Return nil if result is nil
@@ -282,11 +294,12 @@ func duckdbValueVarchar(result uintptr, col, row int) *byte {
 		return nil
 	}
 
-	// Return as byte pointer - caller must free this memory after use
+	// Return as byte pointer - CRITICAL: caller MUST free this memory with C.duckdb_free after use
 	return (*byte)(unsafe.Pointer(cStr))
 }
 
 // cStrLen calculates the length of a C string (null-terminated)
+// with a maximum length limit to prevent buffer overruns
 func cStrLen(s *byte) int {
 	// Calculate C string length (until null terminator)
 	if s == nil {
@@ -295,9 +308,23 @@ func cStrLen(s *byte) int {
 
 	p := unsafe.Pointer(s)
 	count := 0
-	for *(*byte)(p) != 0 {
+	// Add a safety limit to prevent potential buffer overruns
+	// Most database strings shouldn't exceed this reasonable limit
+	const maxLen = 1 << 20 // 1 MB maximum string length
+	
+	for count < maxLen {
+		if *(*byte)(p) == 0 {
+			break
+		}
 		count++
 		p = unsafe.Pointer(uintptr(p) + 1)
+	}
+
+	// If we hit the limit without finding a null terminator,
+	// it's likely an invalid string or memory corruption
+	if count == maxLen {
+		// Return a safe length, logging could be added here in the future
+		return count
 	}
 
 	return count
