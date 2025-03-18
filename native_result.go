@@ -55,6 +55,9 @@ type StringTable struct {
 	// Reference counts for each string
 	refCounts sync.Map
 
+	// Mutex to ensure atomic operations across multiple maps
+	mu sync.Mutex
+
 	// Statistics for monitoring
 	hits   uint64
 	misses uint64
@@ -67,14 +70,42 @@ var globalStringTable = &StringTable{}
 // GetOrCreateString gets a string from the table or creates a new one
 // This is a true zero-copy implementation that shares memory with DuckDB
 func (st *StringTable) GetOrCreateString(ptr unsafe.Pointer, length int) string {
+	// Check for empty or nil pointer cases first - don't need locking for these
+	if ptr == nil || length == 0 {
+		return ""
+	}
+
 	// Use pointer value as key
 	key := uintptr(ptr)
 
-	// Try to get an existing string
+	// Fast path: try to get an existing string without locking
 	if val, ok := st.strings.Load(key); ok {
-		// Increment reference count
+		// Increment reference count while holding the lock
+		st.mu.Lock()
+		
+		// Double-check the key still exists after acquiring the lock
 		if rc, ok := st.refCounts.Load(key); ok {
 			st.refCounts.Store(key, rc.(int)+1)
+			st.mu.Unlock()
+			atomic.AddUint64(&st.hits, 1)
+			return val.(string)
+		}
+		st.mu.Unlock()
+		
+		// Key was removed between our check and lock, continue to slow path
+	}
+
+	// Slow path: create a new string entry
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	// Check again if another goroutine added it while we were waiting
+	if val, ok := st.strings.Load(key); ok {
+		if rc, ok := st.refCounts.Load(key); ok {
+			st.refCounts.Store(key, rc.(int)+1)
+		} else {
+			// Ref count missing but string exists - unusual, initialize it
+			st.refCounts.Store(key, 1)
 		}
 		atomic.AddUint64(&st.hits, 1)
 		return val.(string)
@@ -83,19 +114,15 @@ func (st *StringTable) GetOrCreateString(ptr unsafe.Pointer, length int) string 
 	// Create a new string using unsafe to avoid copy
 	// This directly references the memory in DuckDB
 	var s string
-	if length == 0 {
-		s = ""
-	} else {
-		// Create a string header that points to the C memory
-		// This is the key to zero-copy: we're sharing memory between C and Go
-		stringHeader := &reflect.StringHeader{
-			Data: uintptr(ptr),
-			Len:  length,
-		}
-		s = *(*string)(unsafe.Pointer(stringHeader))
+	// Create a string header that points to the C memory
+	// This is the key to zero-copy: we're sharing memory between C and Go
+	stringHeader := &reflect.StringHeader{
+		Data: uintptr(ptr),
+		Len:  length,
 	}
+	s = *(*string)(unsafe.Pointer(stringHeader))
 
-	// Store in the map
+	// Store in the maps while holding the lock
 	st.strings.Store(key, s)
 	st.refCounts.Store(key, 1)
 	atomic.AddUint64(&st.misses, 1)
@@ -107,7 +134,15 @@ func (st *StringTable) GetOrCreateString(ptr unsafe.Pointer, length int) string 
 // Release decrements the reference count for a string
 // When the count reaches zero, the string is removed from the table
 func (st *StringTable) Release(ptr unsafe.Pointer) {
+	if ptr == nil {
+		return
+	}
+	
 	key := uintptr(ptr)
+	
+	// Acquire lock for the entire operation to ensure atomicity
+	st.mu.Lock()
+	defer st.mu.Unlock()
 
 	// Decrement reference count
 	if rc, ok := st.refCounts.Load(key); ok {
@@ -225,9 +260,11 @@ func (dr *DirectResult) ExtractStringColumnTrueZeroCopy(colIdx int) ([]string, [
 	return strings, nulls, nil
 }
 
-// ExtractStringColumnZeroCopy extracts a string column with optimized memory management
-// This implementation uses a buffer pool to minimize allocations but still creates
-// string copies. Use ExtractStringColumnTrueZeroCopy for zero-copy performance.
+// ExtractStringColumnZeroCopy is deprecated, use ExtractStringColumnTrueZeroCopy directly
+// This method is maintained for backward compatibility only
+//
+// Deprecated: Use ExtractStringColumnTrueZeroCopy instead for better performance
+// and clearer semantics.
 func (dr *DirectResult) ExtractStringColumnZeroCopy(colIdx int) ([]string, []bool, error) {
 	return dr.ExtractStringColumnTrueZeroCopy(colIdx)
 }
@@ -2400,12 +2437,30 @@ func extractColumnsParallel[T any](dr *DirectResult, colIndices []int,
 	// Wait for all goroutines to complete
 	wg.Wait()
 
-	// Check if any errors occurred
-	select {
-	case err := <-errChan:
-		return nil, nil, err
-	default:
-		// No errors
+	// Check if any errors occurred - collect all errors
+	var errors []error
+drain:
+	for {
+		select {
+		case err := <-errChan:
+			errors = append(errors, err)
+		default:
+			break drain
+		}
+	}
+
+	// If we have any errors, return them all
+	if len(errors) > 0 {
+		// Create a combined error message
+		errMsg := fmt.Sprintf("%d errors occurred during parallel extraction. First error: %v", 
+			len(errors), errors[0])
+		
+		// For debugging, include all errors
+		if len(errors) > 1 {
+			errMsg += fmt.Sprintf(". Additional errors: %v", errors[1:])
+		}
+		
+		return nil, nil, fmt.Errorf(errMsg)
 	}
 
 	return results, nullMasks, nil

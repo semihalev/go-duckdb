@@ -67,9 +67,9 @@ This document highlights critical issues, unused methods, and performance bottle
 ## native_result.go
 
 ### Critical Issues
-- **Duplicate functionality** (Lines 230-232): `ExtractStringColumnZeroCopy` simply calls `ExtractStringColumnTrueZeroCopy` with no additional logic, creating unnecessary method overhead.
-- **Threading issue** (Lines 2373-2412): `extractColumnsParallel` uses `errChan` but doesn't properly handle multiple concurrent errors, only returning the first one.
-- **Thread safety concerns** (Lines 66-125): The StringTable uses sync.Map which provides thread safety, but each StringTable method lacks internal coherence guarantees when multiple operations are performed on the same key.
+- ✅ **FIXED: Duplicate functionality** (Lines 230-232): Added proper deprecation notices to `ExtractStringColumnZeroCopy` to clarify its purpose and direct users to the true zero-copy method.
+- ✅ **FIXED: Threading issue** (Lines 2373-2412): Fixed `extractColumnsParallel` to properly collect and report all errors from concurrent column extractions, not just the first one.
+- ✅ **FIXED: Thread safety concerns** (Lines 66-125): Improved StringTable thread safety by adding a mutex to ensure atomicity of operations across multiple maps, implemented double-checking pattern, and added proper nil handling.
 
 ### Unused Code
 - **Unused buffer pools** (Lines 136-148): `stringBufferPool` and `blobBufferPool` are defined but never used after the switch to true zero-copy methods.
@@ -260,6 +260,24 @@ This document highlights critical issues, unused methods, and performance bottle
   - Added proper nil checks to prevent panic conditions
   - Used two-phase map lookup pattern for safe concurrent access
 
+- ✅ **Thread safety in StringTable** (native_result.go): Fixed thread safety issues in zero-copy string handling.
+  - Added mutex for atomic operations across multiple maps
+  - Implemented double-checking pattern to handle race conditions
+  - Added proper nil pointer handling for safety
+  - Improved error handling with better documentation
+
+- ✅ **Error handling in parallel extraction** (native_result.go): Fixed error collection in `extractColumnsParallel`.
+  - Now collects and reports all errors from parallel goroutines
+  - Provides detailed error information for debugging
+  - Creates a combined error message for better diagnostics
+  - Properly drains the error channel to avoid leaking resources
+
+- ✅ **Ambiguous APIs** (native_result.go): Clarified ambiguous API methods.
+  - Added proper deprecation notice to `ExtractStringColumnZeroCopy`
+  - Directed users to the true zero-copy method
+  - Improved documentation to explain the purpose of each method
+  - Maintained backward compatibility while guiding users to better alternatives
+
 #### Technical Notes
 1. DuckDB returns BLOBs as formatted string literals like `\x01\x02\x03\x04\x05` in some implementations, not byte slices
 2. Empty BLOBs should be bound with `nil` pointer and size 0, not with a temporary slice
@@ -267,3 +285,5 @@ This document highlights critical issues, unused methods, and performance bottle
 4. DuckDB COUNT(*) operations return int64 values, not int32, requiring proper type assertion in tests
 5. Proper vector memory management is critical for long-running applications to prevent memory leaks
 6. Map access patterns must be carefully designed in concurrent code to avoid race conditions
+7. When using multiple maps for related data (like StringTable's strings and refCounts), operations must be atomic across all maps
+8. Double-checking patterns are essential when using sync.Map with additional synchronization mechanisms
