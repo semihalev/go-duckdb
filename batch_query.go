@@ -1,4 +1,3 @@
-// Package duckdb provides a zero-allocation, high-performance SQL driver for DuckDB in Go.
 package duckdb
 
 /*
@@ -15,7 +14,6 @@ import (
 	"fmt"
 	"io"
 	"reflect"
-	"sync"
 	"unsafe"
 )
 
@@ -46,9 +44,6 @@ type BatchQuery struct {
 
 	// Temporary buffer for conversions
 	buffer []byte
-
-	// Mutex for thread safety
-	mu sync.Mutex
 }
 
 // ColumnVector represents a type-specific vector of column values
@@ -76,9 +71,6 @@ type ColumnVector struct {
 	stringData  []string
 	blobData    [][]byte
 	timeData    []interface{} // For timestamp, date, time
-
-	// String cache for efficient string handling
-	stringCache *StringCache
 }
 
 // NewBatchQuery creates a new batch-oriented query from a DuckDB result
@@ -231,10 +223,6 @@ func (bq *BatchQuery) Close() error {
 // fetchNextBatch fetches the next batch of rows from the result
 // This is where the core batch processing happens
 func (bq *BatchQuery) fetchNextBatch() bool {
-	// Acquire lock to ensure thread safety when modifying state
-	bq.mu.Lock()
-	defer bq.mu.Unlock()
-
 	// Check if we're at the end of results
 	if bq.currentRow >= bq.rowCount {
 		bq.batchAvailable = 0
@@ -271,11 +259,11 @@ func (bq *BatchQuery) fetchNextBatch() bool {
 
 // extractColumnBatch extracts a batch of values for a specific column
 // This is optimized to minimize CGO boundary crossings
-func (bq *BatchQuery) extractColumnBatch(columnIdx int, startRow int, batchSize int, vector *ColumnVector) {
+func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int, vector *ColumnVector) {
 	// Get DuckDB C types ready
-	cColIdx := C.idx_t(columnIdx)
+	cColIdx := C.idx_t(colIdx)
 	cStartRow := C.idx_t(startRow)
-	colType := bq.columnTypes[columnIdx]
+	colType := bq.columnTypes[colIdx]
 
 	// First pass: extract null values for the entire batch
 	// This is done separately to minimize CGO boundary crossings
@@ -359,32 +347,18 @@ func (bq *BatchQuery) extractColumnBatch(columnIdx int, startRow int, batchSize 
 		}
 
 	case C.DUCKDB_TYPE_VARCHAR:
-		// Optimized batch string extraction with string caching
-		if vector.stringCache == nil {
-			vector.stringCache = NewStringCache(bq.columnCount)
-		}
-
-		// Extract all strings with batched/cached approach
+		// Extract all string values in the batch
 		for i := 0; i < batchSize; i++ {
 			if !vector.nullMap[i] {
 				rowIdx := cStartRow + C.idx_t(i)
 				cstr := C.duckdb_value_varchar(bq.result, cColIdx, rowIdx)
 				if cstr != nil {
-					// Use string cache to deduplicate strings and avoid repeated allocations
-					length := C.strlen(cstr)
-					vector.stringData[i] = vector.stringCache.GetFromCString(int(columnIdx), cstr, length)
+					vector.stringData[i] = C.GoString(cstr)
 					C.duckdb_free(unsafe.Pointer(cstr))
 				} else {
 					vector.stringData[i] = ""
 				}
 			}
-		}
-
-		// Check if we should reset the string cache based on hit/miss stats
-		hits, misses, _ := vector.stringCache.Stats()
-		if hits+misses > 100000 && float64(hits)/float64(hits+misses) < 0.5 {
-			// Reset cache if hit rate is low and we've processed many strings
-			vector.stringCache.Reset()
 		}
 
 	case C.DUCKDB_TYPE_BLOB:
