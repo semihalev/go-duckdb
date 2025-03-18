@@ -143,7 +143,18 @@ func (c *Connection) PrepareContext(ctx context.Context, query string) (driver.S
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	return c.FastPrepare(query)
+	// Use FastPrepare but wrap it with FastStmtWrapper to ensure it implements all needed interfaces
+	fastStmt, err := c.FastPrepare(query)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Wrap with FastStmtWrapper which properly implements driver.StmtQueryContext
+	return &FastStmtWrapper{
+		conn:  c,
+		stmt:  fastStmt,
+		query: query,
+	}, nil
 }
 
 // ExecContext executes a query without returning any rows.

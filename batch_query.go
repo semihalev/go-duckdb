@@ -762,9 +762,9 @@ func (bs *BatchStmt) bindBatchParameters(args []interface{}) error {
 
 		case []byte:
 			if len(v) == 0 {
-				// Fixed: Use a more memory-safe approach for empty blobs
-				emptyBuffer := make([]byte, 0)
-				if err := C.duckdb_bind_blob(*bs.stmt, idx, unsafe.Pointer(&emptyBuffer), C.idx_t(0)); err == C.DuckDBError {
+				// For empty blobs, pass nil pointer with size 0
+				// This is safer than using a temporary slice
+				if err := C.duckdb_bind_blob(*bs.stmt, idx, nil, C.idx_t(0)); err == C.DuckDBError {
 					return fmt.Errorf("failed to bind empty blob parameter at index %d", i)
 				}
 			} else {

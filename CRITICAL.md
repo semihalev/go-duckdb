@@ -200,7 +200,9 @@ This document highlights critical issues, unused methods, and performance bottle
 ## appender.go
 
 ### Critical Issues
-- **Missing transaction handling**: No mechanism to ensure atomicity across multiple appends, which could lead to partial data commits.
+- ✅ **FIXED: Missing transaction handling**: Implemented AppenderWithTransaction to ensure atomicity across multiple appends and prevent partial data commits.
+  - Added comprehensive test suite with transaction commit, rollback, and context cancellation tests
+  - Fixed type conversion issues with COUNT(*) queries in tests (DuckDB returns int64, not int32)
 
 ### Performance Bottlenecks
 - **Inefficient empty blob handling** (Lines 396-407): Creating a new 1-byte buffer for every empty blob is inefficient. Should use a static zero-length buffer.
@@ -215,9 +217,36 @@ This document highlights critical issues, unused methods, and performance bottle
 ✅ 1. **Fix race conditions** in buffer_pool.go, batch_query.go (fixed), and string_cache.go which could cause crashes or memory corruption.
 ✅ 2. **Address resource leaks** in connection handling and result processing (fixed in parallel_api.go, batch_query.go, and connection.go).
 3. **Optimize CGO boundary crossings** which are significant performance bottlenecks.
-✅ 4. **Implement proper context handling** to ensure resources are released on cancellation (fixed in batch_query.go and connection.go).
+✅ 4. **Implement proper context handling** to ensure resources are released on cancellation (fixed in batch_query.go, connection.go, and statement.go).
 5. **Reduce code duplication** through refactoring common patterns and extraction methods.
 ✅ 6. **Replace unsafe reflect.SliceHeader usage** with unsafe.Slice (Go 1.17+) to prevent future compatibility issues (fixed in parallel_api.go, still needed in rows.go).
 ✅ 7. **Improve thread safety** with consistent locking patterns (fixed in buffer_pool.go, batch_query.go, parallel_api.go, and connection.go).
-8. **Add proper memory management** for native resources.
-9. **Implement batched processing** where currently using row-by-row operations.
+✅ 8. **Fix unsafe empty BLOB handling** in statement.go and batch_query.go to prevent potential memory corruption.
+✅ 9. **Add transaction support for appender** to ensure atomicity and prevent partial commits.
+10. **Add proper memory management** for native resources.
+11. **Implement batched processing** where currently using row-by-row operations.
+
+## Recent Fixes (March 2025)
+
+### BLOB Handling and Context Support
+
+#### Issues Fixed
+- ✅ **Unsafe empty BLOB handling** (statement.go, batch_query.go): Fixed handling of empty BLOBs by using `nil` pointer with size 0 instead of an unsafe temporary slice.
+  - Previously: `unsafe.Pointer(&[]byte{0}[0])` with size 0 for empty BLOBs
+  - Now: `nil` with size 0, which is the proper way to handle empty BLOBs in DuckDB
+  
+- ✅ **Driver interface compatibility** (connection.go): Fixed PrepareContext to properly use FastStmtWrapper for context-aware statements.
+  - The wrapper ensures that prepared statements implement driver.StmtQueryContext
+  - Updated tests to verify proper behavior with empty/nil BLOBs and context cancellation
+
+- ✅ **Transaction support for appenders** (appender_tx.go): Implemented AppenderWithTransaction for atomic operations.
+  - Added transaction-aware methods including Commit, Rollback, and Close
+  - Added context-aware versions for cancellation support
+  - Fixed type conversion for COUNT(*) query results (int64 vs int32)
+  - Comprehensive test suite for various transaction scenarios
+
+#### Technical Notes
+1. DuckDB returns BLOBs as formatted string literals like `\x01\x02\x03\x04\x05` in some implementations, not byte slices
+2. Empty BLOBs should be bound with `nil` pointer and size 0, not with a temporary slice
+3. When using prepared statements with context methods, proper interface implementation is crucial for safe concurrent usage
+4. DuckDB COUNT(*) operations return int64 values, not int32, requiring proper type assertion in tests

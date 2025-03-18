@@ -9,6 +9,7 @@ package duckdb
 import "C"
 
 import (
+	"context"
 	"database/sql/driver"
 	"errors"
 	"fmt"
@@ -73,7 +74,58 @@ func (s *Statement) NumInput() int {
 	return s.params
 }
 
+// ExecContext executes a query that doesn't return rows, with context support.
+func (s *Statement) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return nil, errors.New("statement is closed")
+	}
+
+	if atomic.LoadInt32(&s.conn.closed) != 0 {
+		return nil, driver.ErrBadConn
+	}
+
+	// Check if context is already canceled
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Context is still valid, proceed
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Bind parameters
+	if err := bindParameters(s.stmt, args); err != nil {
+		return nil, err
+	}
+
+	// Check context again before executing
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Proceed with execution
+	}
+
+	// Execute statement
+	var result C.duckdb_result
+	if err := C.duckdb_execute_prepared(*s.stmt, &result); err == C.DuckDBError {
+		return nil, fmt.Errorf("failed to execute statement: %s", goString(C.duckdb_result_error(&result)))
+	}
+	defer C.duckdb_destroy_result(&result)
+
+	// Get affected rows
+	rowsAffected := C.duckdb_rows_changed(&result)
+
+	return &Result{
+		rowsAffected: int64(rowsAffected),
+		lastInsertID: 0, // DuckDB doesn't support last insert ID
+	}, nil
+}
+
 // Exec executes a query that doesn't return rows.
+// Deprecated: Use ExecContext instead.
 func (s *Statement) Exec(args []driver.Value) (driver.Result, error) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return nil, errors.New("statement is closed")
@@ -119,7 +171,59 @@ func (s *Statement) Exec(args []driver.Value) (driver.Result, error) {
 	}, nil
 }
 
+// QueryContext executes a query that may return rows with context support.
+func (s *Statement) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	if atomic.LoadInt32(&s.closed) != 0 {
+		return nil, errors.New("statement is closed")
+	}
+
+	if atomic.LoadInt32(&s.conn.closed) != 0 {
+		return nil, driver.ErrBadConn
+	}
+
+	// Check if context is already canceled
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Context is still valid, proceed
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Bind parameters
+	if err := bindParameters(s.stmt, args); err != nil {
+		return nil, err
+	}
+
+	// Check context again before executing
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+		// Proceed with execution
+	}
+
+	// Get a result set wrapper from the pool
+	wrapper := globalBufferPool.GetResultSetWrapper()
+
+	// Execute statement with pooled result - pass by address since it's a struct now
+	if err := C.duckdb_execute_prepared(*s.stmt, &wrapper.result); err == C.DuckDBError {
+		// Get error message before returning wrapper to pool
+		errorMsg := goString(C.duckdb_result_error(&wrapper.result))
+		globalBufferPool.PutResultSetWrapper(wrapper)
+
+		return nil, fmt.Errorf("failed to execute statement: %s", errorMsg)
+	}
+
+	// Create rows with the pooled wrapper
+	// The Rows object will be responsible for returning the wrapper to the pool
+	return newRowsWithWrapper(wrapper), nil
+}
+
 // Query executes a query that may return rows.
+// Deprecated: Use QueryContext instead.
 func (s *Statement) Query(args []driver.Value) (driver.Rows, error) {
 	if atomic.LoadInt32(&s.closed) != 0 {
 		return nil, errors.New("statement is closed")
@@ -229,7 +333,9 @@ func bindParameters(stmt *C.duckdb_prepared_statement, args []driver.NamedValue)
 
 		case []byte:
 			if len(v) == 0 {
-				if err := C.duckdb_bind_blob(*stmt, idx, unsafe.Pointer(&[]byte{0}[0]), C.idx_t(0)); err == C.DuckDBError {
+				// For empty blobs, pass nil pointer with size 0
+				// This is safer than using a temporary slice
+				if err := C.duckdb_bind_blob(*stmt, idx, nil, C.idx_t(0)); err == C.DuckDBError {
 					return fmt.Errorf("failed to bind empty blob parameter at index %d", i)
 				}
 			} else {
