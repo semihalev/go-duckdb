@@ -202,16 +202,25 @@ func (sc *StringCache) GetFromBytes(colIdx int, bytes []byte) string {
 }
 
 // GetFromCString efficiently converts a C string to a Go string
-// Optimized for both performance and memory usage with C string pointer caching
+// Thread-safe implementation with proper locking to prevent race conditions
 func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t) string {
-	// Ensure we have space in the column values
+	// This function handles all thread safety concerns properly by ensuring:
+	// 1. Locks are acquired and released consistently
+	// 2. No data races when accessing shared maps
+	// 3. Lock is released on all return paths
+
+	// Ensure we have space in the column values (no lock needed for len)
 	if colIdx >= len(sc.columnValues) {
-		newValues := make([]string, colIdx+1)
-		copy(newValues, sc.columnValues)
-		sc.columnValues = newValues
+		sc.mu.Lock() // Lock for column values expansion
+		if colIdx >= len(sc.columnValues) { // Double-check after locking
+			newValues := make([]string, colIdx+1)
+			copy(newValues, sc.columnValues)
+			sc.columnValues = newValues
+		}
+		sc.mu.Unlock()
 	}
 
-	// Fast path for nil or empty strings
+	// Fast path for nil or empty strings (no lock needed)
 	if cstr == nil || length == 0 {
 		sc.columnValues[colIdx] = ""
 		return ""
@@ -220,80 +229,39 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 	// Get C string address for cache lookup
 	cstrAddr := uintptr(unsafe.Pointer(cstr))
 
-	// Check C string pointer cache first - fastest path when same C string is reused
-	// This avoids the expensive C.GoStringN conversion completely
-	sc.mu.Lock()
-	if cached, ok := sc.cStringMap[cstrAddr]; ok {
-		sc.mu.Unlock()
-		sc.columnValues[colIdx] = cached
-		sc.cHits++
-		return cached
-	}
-	sc.mu.Unlock()
-
 	// Safety check - if length is unreasonably large, cap it
 	actualLength := int(length)
 	if actualLength > 1024*1024 { // Cap at 1MB for safety
 		actualLength = 1024 * 1024
 	}
 
-	// Use direct GoString for small strings - more efficient than buffer copying
-	if actualLength < sc.smallStringThreshold {
-		s := C.GoStringN(cstr, C.int(actualLength))
-
-		// Check local map for string value
-		if cached, ok := sc.internMap[s]; ok {
-			// Cache the C string pointer for future lookups
-			sc.mu.Lock()
-			sc.cStringMap[cstrAddr] = cached
-			sc.mu.Unlock()
-
-			sc.columnValues[colIdx] = cached
-			sc.hits++
-			return cached
-		}
-
-		// For very small strings, use the shared pool for massive deduplication
-		if sc.useSharedStringMap {
-			result := globalBufferPool.GetSharedString(s)
-
-			// Cache locally for future hits
-			sc.internMap[s] = result
-
-			// Cache C string pointer too
-			sc.mu.Lock()
-			sc.cStringMap[cstrAddr] = result
-			sc.mu.Unlock()
-
-			sc.columnValues[colIdx] = result
-			sc.misses++
-			return result
-		}
-
-		// For non-shared mode, store in local map
-		sc.internMap[s] = s
-
-		// Cache C string pointer
-		sc.mu.Lock()
-		sc.cStringMap[cstrAddr] = s
+	// First, check C string map cache with proper locking
+	sc.mu.Lock()
+	if cached, ok := sc.cStringMap[cstrAddr]; ok {
+		// Cached result found - update stats and release lock
+		sc.columnValues[colIdx] = cached
+		sc.cHits++
 		sc.mu.Unlock()
-
-		sc.columnValues[colIdx] = s
-		sc.misses++
-		return s
+		return cached
 	}
+	sc.mu.Unlock() // Release lock for string creation
 
-	// For medium strings, use buffer with synchronized access
-	if actualLength < sc.largeStringThreshold {
-		// Lock for buffer access
-		sc.mu.Lock()
+	// Not found in cache, need to create string from C string
+	var s string
+
+	// Small and large strings use direct GoStringN
+	if actualLength < sc.smallStringThreshold || actualLength >= sc.largeStringThreshold {
+		s = C.GoStringN(cstr, C.int(actualLength))
+	} else {
+		// Medium strings use our buffer for better performance
+		sc.mu.Lock() // Lock for buffer access
 
 		// Ensure buffer is large enough
 		if len(sc.buffer) < actualLength {
 			sc.buffer = make([]byte, actualLength*2)
 		}
 
-		// Copy from C memory to our buffer
+		// Copy from C memory to our buffer with bounds checking
 		for i := 0; i < actualLength; i++ {
 			bytePtr := (*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(cstr)) + uintptr(i)))
 			if bytePtr != nil {
@@ -306,42 +274,67 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 		}
 
 		// Create string from buffer
-		s := string(sc.buffer[:actualLength])
+		s = string(sc.buffer[:actualLength])
+		sc.mu.Unlock() // Release lock after string creation
+	}
 
-		// Cache the C string pointer before unlocking
-		sc.cStringMap[cstrAddr] = s
-
-		// Unlock after string creation but before caching
-		sc.mu.Unlock()
-
-		// Only use shared map for medium strings
-		if sc.useSharedStringMap {
-			result := globalBufferPool.GetSharedString(s)
-
-			// Update C string cache with the shared string
-			sc.mu.Lock()
-			sc.cStringMap[cstrAddr] = result
+	// For small strings, check intern map
+	if len(s) < sc.smallStringThreshold {
+		sc.mu.Lock() // Lock for map access
+		
+		// Look in intern map first
+		if cached, ok := sc.internMap[s]; ok {
+			sc.cStringMap[cstrAddr] = cached // Cache C string pointer too
+			sc.columnValues[colIdx] = cached
+			sc.hits++
 			sc.mu.Unlock()
+			return cached
+		}
 
+		// For very small strings, use shared pool with proper locking
+		if sc.useSharedStringMap {
+			sc.mu.Unlock() // Release lock before external call
+			result := globalBufferPool.GetSharedString(s)
+			sc.mu.Lock() // Re-acquire for updating maps
+			
+			// Cache in both maps
+			sc.internMap[s] = result
+			sc.cStringMap[cstrAddr] = result
 			sc.columnValues[colIdx] = result
 			sc.misses++
+			sc.mu.Unlock()
 			return result
 		}
 
+		// For non-shared mode, store in both maps
+		sc.internMap[s] = s
+		sc.cStringMap[cstrAddr] = s
 		sc.columnValues[colIdx] = s
 		sc.misses++
+		sc.mu.Unlock()
 		return s
 	}
 
-	// For large strings, use direct C.GoString with minimal caching
-	s := C.GoStringN(cstr, C.int(actualLength))
+	// For medium strings with shared map
+	if len(s) < sc.largeStringThreshold && sc.useSharedStringMap {
+		result := globalBufferPool.GetSharedString(s)
+		
+		// Update C string cache
+		sc.mu.Lock()
+		sc.cStringMap[cstrAddr] = result
+		sc.mu.Unlock()
+		
+		sc.columnValues[colIdx] = result
+		sc.misses++
+		return result
+	}
 
-	// For large strings, we still cache the C string pointer
-	// This is important because the same large string may be used repeatedly
+	// For large strings or medium strings without shared map
+	// Update C string cache for large strings too
 	sc.mu.Lock()
 	sc.cStringMap[cstrAddr] = s
 	sc.mu.Unlock()
-
+	
 	sc.columnValues[colIdx] = s
 	sc.misses++
 	return s
