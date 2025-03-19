@@ -507,12 +507,12 @@ func TestBatchExec(t *testing.T) {
 
 	// Create multiple parameter sets for the batch operation
 	batchSize := 10
-	
+
 	// We need to create a slice with a structure that matches what BatchExec expects
 	// Each element in the batch should be a driver.Value containing a []interface{}
 	// This structure allows BatchExec to process multiple sets of parameters at once
 	driverParams := make([]driver.Value, batchSize)
-	
+
 	// Populate parameter sets with minimal types
 	for i := 0; i < batchSize; i++ {
 		// Each parameter set is an individual []interface{} that represents one row
@@ -523,7 +523,7 @@ func TestBatchExec(t *testing.T) {
 		// Store the parameter set as a driver.Value
 		driverParams[i] = paramSet
 	}
-	
+
 	// Execute with BatchExec
 	result, err := conn.BatchExec("INSERT INTO batch_exec_test VALUES (?, ?)", driverParams)
 	if err != nil {

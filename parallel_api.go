@@ -469,13 +469,13 @@ func extractInt32ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowCou
 	if dr.closed {
 		return nil, nil, ErrResultClosed
 	}
-	
+
 	// Define block size for processing to reduce CGO boundary crossings
 	const blockSize = 64
-	
+
 	// Convert to C index
 	cColIdx := C.idx_t(colIdx)
-	
+
 	// Process the data in blocks to minimize CGO boundary crossings
 	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
 		// Calculate actual block size (might be smaller at the end)
@@ -484,14 +484,14 @@ func extractInt32ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowCou
 			blockEnd = rowCount
 		}
 		actualBlockSize := blockEnd - blockStart
-		
+
 		// Extract null values for this block
 		for i := 0; i < actualBlockSize; i++ {
 			rowIdx := C.idx_t(startRow + blockStart + i)
 			isNull := C.duckdb_value_is_null(dr.result, cColIdx, rowIdx)
 			nulls[blockStart+i] = cBoolToGo(isNull)
 		}
-		
+
 		// Extract non-null values
 		for i := 0; i < actualBlockSize; i++ {
 			if !nulls[blockStart+i] {
@@ -543,13 +543,13 @@ func extractInt64ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowCou
 	if dr.closed {
 		return nil, nil, ErrResultClosed
 	}
-	
+
 	// Define block size for processing to reduce CGO boundary crossings
 	const blockSize = 64
-	
+
 	// Convert to C index
 	cColIdx := C.idx_t(colIdx)
-	
+
 	// Process the data in blocks to minimize CGO boundary crossings
 	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
 		// Calculate actual block size (might be smaller at the end)
@@ -558,14 +558,14 @@ func extractInt64ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowCou
 			blockEnd = rowCount
 		}
 		actualBlockSize := blockEnd - blockStart
-		
+
 		// Extract null values for this block
 		for i := 0; i < actualBlockSize; i++ {
 			rowIdx := C.idx_t(startRow + blockStart + i)
 			isNull := C.duckdb_value_is_null(dr.result, cColIdx, rowIdx)
 			nulls[blockStart+i] = cBoolToGo(isNull)
 		}
-		
+
 		// Extract non-null values
 		for i := 0; i < actualBlockSize; i++ {
 			if !nulls[blockStart+i] {
@@ -617,13 +617,13 @@ func extractFloat64ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowC
 	if dr.closed {
 		return nil, nil, ErrResultClosed
 	}
-	
+
 	// Define block size for processing to reduce CGO boundary crossings
 	const blockSize = 64
-	
+
 	// Convert to C index
 	cColIdx := C.idx_t(colIdx)
-	
+
 	// Process the data in blocks to minimize CGO boundary crossings
 	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
 		// Calculate actual block size (might be smaller at the end)
@@ -632,14 +632,14 @@ func extractFloat64ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowC
 			blockEnd = rowCount
 		}
 		actualBlockSize := blockEnd - blockStart
-		
+
 		// Extract null values for this block
 		for i := 0; i < actualBlockSize; i++ {
 			rowIdx := C.idx_t(startRow + blockStart + i)
 			isNull := C.duckdb_value_is_null(dr.result, cColIdx, rowIdx)
 			nulls[blockStart+i] = cBoolToGo(isNull)
 		}
-		
+
 		// Extract non-null values
 		for i := 0; i < actualBlockSize; i++ {
 			if !nulls[blockStart+i] {

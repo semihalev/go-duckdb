@@ -512,13 +512,13 @@ func (r *Rows) ExtractInt64Column(colIdx int) ([]int64, []bool, error) {
 	} else {
 		resultPtr = r.result
 	}
-	
+
 	// Define block size for processing to reduce CGO boundary crossings
 	const blockSize = 64
-	
+
 	// Convert to C index
 	cColIdx := C.idx_t(colIdx)
-	
+
 	// Process the data in blocks to minimize CGO boundary crossings
 	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
 		// Calculate actual block size (might be smaller at the end)
@@ -527,14 +527,14 @@ func (r *Rows) ExtractInt64Column(colIdx int) ([]int64, []bool, error) {
 			blockEnd = rowCount
 		}
 		actualBlockSize := blockEnd - blockStart
-		
+
 		// Extract null values for this block
 		for i := 0; i < actualBlockSize; i++ {
 			rowIdx := C.idx_t(blockStart + i)
 			isNull := C.duckdb_value_is_null(resultPtr, cColIdx, rowIdx)
 			nulls[blockStart+i] = cBoolToGo(isNull)
 		}
-		
+
 		// Extract non-null values
 		for i := 0; i < actualBlockSize; i++ {
 			if !nulls[blockStart+i] {
@@ -574,13 +574,13 @@ func (r *Rows) ExtractFloat64Column(colIdx int) ([]float64, []bool, error) {
 	} else {
 		resultPtr = r.result
 	}
-	
+
 	// Define block size for processing to reduce CGO boundary crossings
 	const blockSize = 64
-	
+
 	// Convert to C index
 	cColIdx := C.idx_t(colIdx)
-	
+
 	// Process the data in blocks to minimize CGO boundary crossings
 	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
 		// Calculate actual block size (might be smaller at the end)
@@ -589,14 +589,14 @@ func (r *Rows) ExtractFloat64Column(colIdx int) ([]float64, []bool, error) {
 			blockEnd = rowCount
 		}
 		actualBlockSize := blockEnd - blockStart
-		
+
 		// Extract null values for this block
 		for i := 0; i < actualBlockSize; i++ {
 			rowIdx := C.idx_t(blockStart + i)
 			isNull := C.duckdb_value_is_null(resultPtr, cColIdx, rowIdx)
 			nulls[blockStart+i] = cBoolToGo(isNull)
 		}
-		
+
 		// Extract non-null values
 		for i := 0; i < actualBlockSize; i++ {
 			if !nulls[blockStart+i] {
@@ -637,13 +637,13 @@ func (r *Rows) ExtractTimestampColumn(colIdx int) ([]int64, []bool, error) {
 	} else {
 		resultPtr = r.result
 	}
-	
+
 	// Define block size for processing to reduce CGO boundary crossings
 	const blockSize = 64
-	
+
 	// Convert to C index
 	cColIdx := C.idx_t(colIdx)
-	
+
 	// Process the data in blocks to minimize CGO boundary crossings
 	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
 		// Calculate actual block size (might be smaller at the end)
@@ -652,14 +652,14 @@ func (r *Rows) ExtractTimestampColumn(colIdx int) ([]int64, []bool, error) {
 			blockEnd = rowCount
 		}
 		actualBlockSize := blockEnd - blockStart
-		
+
 		// Extract null values for this block
 		for i := 0; i < actualBlockSize; i++ {
 			rowIdx := C.idx_t(blockStart + i)
 			isNull := C.duckdb_value_is_null(resultPtr, cColIdx, rowIdx)
 			nulls[blockStart+i] = cBoolToGo(isNull)
 		}
-		
+
 		// Extract non-null values
 		for i := 0; i < actualBlockSize; i++ {
 			if !nulls[blockStart+i] {
@@ -700,13 +700,13 @@ func (r *Rows) ExtractDateColumn(colIdx int) ([]int32, []bool, error) {
 	} else {
 		resultPtr = r.result
 	}
-	
+
 	// Define block size for processing to reduce CGO boundary crossings
 	const blockSize = 64
-	
+
 	// Convert to C index
 	cColIdx := C.idx_t(colIdx)
-	
+
 	// Process the data in blocks to minimize CGO boundary crossings
 	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
 		// Calculate actual block size (might be smaller at the end)
@@ -715,14 +715,14 @@ func (r *Rows) ExtractDateColumn(colIdx int) ([]int32, []bool, error) {
 			blockEnd = rowCount
 		}
 		actualBlockSize := blockEnd - blockStart
-		
+
 		// Extract null values for this block
 		for i := 0; i < actualBlockSize; i++ {
 			rowIdx := C.idx_t(blockStart + i)
 			isNull := C.duckdb_value_is_null(resultPtr, cColIdx, rowIdx)
 			nulls[blockStart+i] = cBoolToGo(isNull)
 		}
-		
+
 		// Extract non-null values
 		for i := 0; i < actualBlockSize; i++ {
 			if !nulls[blockStart+i] {

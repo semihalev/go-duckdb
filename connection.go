@@ -17,7 +17,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
 // Connection represents a connection to a DuckDB database.
@@ -175,119 +174,6 @@ func (c *Connection) ExecContext(ctx context.Context, query string, args []drive
 	defer c.mu.Unlock()
 
 	return c.FastExecContext(ctx, query, args)
-}
-
-// bindValue binds a value to a prepared statement.
-// This is a helper function for the fallback implementation.
-func bindValue(stmt C.duckdb_prepared_statement, idx C.idx_t, value interface{}) error {
-	if value == nil {
-		if err := C.duckdb_bind_null(stmt, idx); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind NULL parameter at index %d", idx)
-		}
-		return nil
-	}
-
-	// Bind based on value type
-	switch v := value.(type) {
-	case bool:
-		val := C.int8_t(0)
-		if v {
-			val = C.int8_t(1)
-		}
-		if err := C.duckdb_bind_int8(stmt, idx, val); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind boolean parameter at index %d", idx)
-		}
-
-	case int8:
-		if err := C.duckdb_bind_int8(stmt, idx, C.int8_t(v)); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind int8 parameter at index %d", idx)
-		}
-
-	case int16:
-		if err := C.duckdb_bind_int16(stmt, idx, C.int16_t(v)); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind int16 parameter at index %d", idx)
-		}
-
-	case int32:
-		if err := C.duckdb_bind_int32(stmt, idx, C.int32_t(v)); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind int32 parameter at index %d", idx)
-		}
-
-	case int:
-		if err := C.duckdb_bind_int64(stmt, idx, C.int64_t(v)); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind int parameter at index %d", idx)
-		}
-
-	case int64:
-		if err := C.duckdb_bind_int64(stmt, idx, C.int64_t(v)); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind int64 parameter at index %d", idx)
-		}
-
-	case uint8:
-		if err := C.duckdb_bind_uint8(stmt, idx, C.uint8_t(v)); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind uint8 parameter at index %d", idx)
-		}
-
-	case uint16:
-		if err := C.duckdb_bind_uint16(stmt, idx, C.uint16_t(v)); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind uint16 parameter at index %d", idx)
-		}
-
-	case uint32:
-		if err := C.duckdb_bind_uint32(stmt, idx, C.uint32_t(v)); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind uint32 parameter at index %d", idx)
-		}
-
-	case uint:
-		if err := C.duckdb_bind_uint64(stmt, idx, C.uint64_t(v)); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind uint parameter at index %d", idx)
-		}
-
-	case uint64:
-		if err := C.duckdb_bind_uint64(stmt, idx, C.uint64_t(v)); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind uint64 parameter at index %d", idx)
-		}
-
-	case float32:
-		if err := C.duckdb_bind_float(stmt, idx, C.float(v)); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind float32 parameter at index %d", idx)
-		}
-
-	case float64:
-		if err := C.duckdb_bind_double(stmt, idx, C.double(v)); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind float64 parameter at index %d", idx)
-		}
-
-	case string:
-		cStr := cString(v)
-		defer freeString(cStr)
-		if err := C.duckdb_bind_varchar(stmt, idx, cStr); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind string parameter at index %d", idx)
-		}
-
-	case []byte:
-		if len(v) == 0 {
-			if err := C.duckdb_bind_blob(stmt, idx, nil, C.idx_t(0)); err == C.DuckDBError {
-				return fmt.Errorf("failed to bind empty blob parameter at index %d", idx)
-			}
-		} else {
-			if err := C.duckdb_bind_blob(stmt, idx, unsafe.Pointer(&v[0]), C.idx_t(len(v))); err == C.DuckDBError {
-				return fmt.Errorf("failed to bind blob parameter at index %d", idx)
-			}
-		}
-
-	case time.Time:
-		// Convert to DuckDB timestamp (microseconds since 1970-01-01)
-		micros := v.Unix()*1000000 + int64(v.Nanosecond())/1000
-		if err := C.duckdb_bind_timestamp(stmt, idx, C.duckdb_timestamp{micros: C.int64_t(micros)}); err == C.DuckDBError {
-			return fmt.Errorf("failed to bind timestamp parameter at index %d", idx)
-		}
-
-	default:
-		return fmt.Errorf("unsupported parameter type %T at index %d", v, idx)
-	}
-
-	return nil
 }
 
 // QueryContext executes a query with the provided context.
@@ -641,7 +527,7 @@ func (conn *Connection) BatchExec(query string, args []driver.Value) (driver.Res
 	if len(args) == 0 {
 		return nil, fmt.Errorf("no parameter sets provided")
 	}
-	
+
 	// Count the number of parameters in the first set
 	var firstParamSetLen int
 	switch v := args[0].(type) {
@@ -650,10 +536,10 @@ func (conn *Connection) BatchExec(query string, args []driver.Value) (driver.Res
 	default:
 		return nil, fmt.Errorf("expected []interface{} parameter set, got %T", args[0])
 	}
-	
+
 	// Count the total rows affected across all executions
 	var totalRowsAffected int64
-	
+
 	// Loop through each parameter set and execute individually
 	// This is a fallback implementation until we have true batch execution
 	for i, arg := range args {
@@ -661,42 +547,42 @@ func (conn *Connection) BatchExec(query string, args []driver.Value) (driver.Res
 		if !ok {
 			return nil, fmt.Errorf("parameter set %d is not []interface{}", i)
 		}
-		
+
 		if len(paramSet) != firstParamSetLen {
-			return nil, fmt.Errorf("parameter set %d has %d parameters, expected %d", 
+			return nil, fmt.Errorf("parameter set %d has %d parameters, expected %d",
 				i, len(paramSet), firstParamSetLen)
 		}
-		
+
 		// Prepare a statement for this execution
 		// We'll reuse the statement for each parameter set
 		stmt, err := conn.Prepare(query)
 		if err != nil {
 			return nil, fmt.Errorf("failed to prepare statement: %w", err)
 		}
-		
+
 		// Convert []interface{} to []driver.Value for Exec
 		driverValues := make([]driver.Value, len(paramSet))
 		for j, p := range paramSet {
 			driverValues[j] = p
 		}
-		
+
 		// Execute with these parameters
 		result, err := stmt.Exec(driverValues)
 		stmt.Close() // Close the statement after use
-		
+
 		if err != nil {
 			return nil, fmt.Errorf("failed to execute batch set %d: %w", i, err)
 		}
-		
+
 		// Add to total rows affected
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get rows affected for batch set %d: %w", i, err)
 		}
-		
+
 		totalRowsAffected += rowsAffected
 	}
-	
+
 	// Return a result with the total rows affected
 	return &Result{
 		rowsAffected: totalRowsAffected,
@@ -723,7 +609,7 @@ func (conn *Connection) BatchExecContext(ctx context.Context, query string, args
 	if len(args) == 0 {
 		return nil, fmt.Errorf("no parameter sets provided")
 	}
-	
+
 	// Count the number of parameters in the first set
 	var firstParamSetLen int
 	switch v := args[0].Value.(type) {
@@ -732,10 +618,10 @@ func (conn *Connection) BatchExecContext(ctx context.Context, query string, args
 	default:
 		return nil, fmt.Errorf("expected []interface{} parameter set, got %T", args[0].Value)
 	}
-	
+
 	// Count the total rows affected across all executions
 	var totalRowsAffected int64
-	
+
 	// Loop through each parameter set and execute individually
 	for i, arg := range args {
 		// Check context periodically
@@ -747,23 +633,23 @@ func (conn *Connection) BatchExecContext(ctx context.Context, query string, args
 				// Context is still valid, proceed
 			}
 		}
-		
+
 		paramSet, ok := arg.Value.([]interface{})
 		if !ok {
 			return nil, fmt.Errorf("parameter set %d is not []interface{}", i)
 		}
-		
+
 		if len(paramSet) != firstParamSetLen {
-			return nil, fmt.Errorf("parameter set %d has %d parameters, expected %d", 
+			return nil, fmt.Errorf("parameter set %d has %d parameters, expected %d",
 				i, len(paramSet), firstParamSetLen)
 		}
-		
+
 		// Prepare a statement for this execution
 		stmt, err := conn.PrepareContext(ctx, query)
 		if err != nil {
 			return nil, fmt.Errorf("failed to prepare statement: %w", err)
 		}
-		
+
 		// Convert paramSet to NamedValue for ExecContext
 		namedValues := make([]driver.NamedValue, len(paramSet))
 		for j, p := range paramSet {
@@ -772,31 +658,31 @@ func (conn *Connection) BatchExecContext(ctx context.Context, query string, args
 				Value:   p,
 			}
 		}
-		
+
 		// Get stmt that implements StmtExecContext
 		execer, ok := stmt.(driver.StmtExecContext)
 		if !ok {
 			stmt.Close()
 			return nil, fmt.Errorf("statement does not implement StmtExecContext")
 		}
-		
+
 		// Execute with these parameters
 		result, err := execer.ExecContext(ctx, namedValues)
 		stmt.Close() // Close the statement after use
-		
+
 		if err != nil {
 			return nil, fmt.Errorf("failed to execute batch set %d: %w", i, err)
 		}
-		
+
 		// Add to total rows affected
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
 			return nil, fmt.Errorf("failed to get rows affected for batch set %d: %w", i, err)
 		}
-		
+
 		totalRowsAffected += rowsAffected
 	}
-	
+
 	// Return a result with the total rows affected
 	return &Result{
 		rowsAffected: totalRowsAffected,
