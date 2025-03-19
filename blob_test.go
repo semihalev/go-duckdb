@@ -63,9 +63,9 @@ func TestBlobHandling(t *testing.T) {
 
 	// Expected sizes, accounting for DuckDB's internal padding
 	knownSizes := map[int][]int{
-		1: {len(smallBlob)},          // Small blob - no padding
-		2: {len(mediumBlob), 2896},   // Medium blob - may be padded to 2896
-		3: {len(largeBlob), 29236},   // Large blob - may be padded to 29236
+		1: {len(smallBlob)},        // Small blob - no padding
+		2: {len(mediumBlob), 2896}, // Medium blob - may be padded to 2896
+		3: {len(largeBlob), 29236}, // Large blob - may be padded to 29236
 	}
 
 	count := 0
