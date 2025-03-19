@@ -511,6 +511,406 @@ func ExtractDateColumnGeneric(result Result, colIdx int) ([]int32, []bool, error
 	return values, nulls, nil
 }
 
+// ExtractBoolColumnGeneric is a generic implementation for extracting boolean columns
+func ExtractBoolColumnGeneric(result Result, colIdx int) ([]bool, []bool, error) {
+	// Get result information
+	resultPtr := result.GetResultPointer()
+	rowCount := int(result.RowCount())
+
+	// Validate column index
+	if colIdx < 0 || colIdx >= result.ColumnCount() {
+		return nil, nil, fmt.Errorf("column index out of range: %d", colIdx)
+	}
+
+	// Validate column type
+	if result.ColumnType(colIdx) != C.DUCKDB_TYPE_BOOLEAN {
+		return nil, nil, fmt.Errorf("column %d is not a BOOLEAN", colIdx)
+	}
+
+	// Create output slices
+	values := make([]bool, rowCount)
+	nulls := make([]bool, rowCount)
+
+	// Use block-based extraction to reduce CGO boundary crossings
+	const blockSize = 64
+	cColIdx := C.idx_t(colIdx)
+
+	for startRow := 0; startRow < rowCount; startRow += blockSize {
+		// Calculate end of current block (handles final partial block)
+		endRow := startRow + blockSize
+		if endRow > rowCount {
+			endRow = rowCount
+		}
+		blockCount := endRow - startRow
+
+		// Process block of null values first
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			nulls[pos] = result.IsNull(colIdx, pos)
+		}
+
+		// Process block of actual values (only for non-null entries)
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			if !nulls[pos] {
+				values[pos] = bool(C.duckdb_value_boolean(resultPtr, cColIdx, C.idx_t(pos)))
+			}
+		}
+	}
+
+	return values, nulls, nil
+}
+
+// ExtractInt8ColumnGeneric is a generic implementation for extracting int8 columns
+func ExtractInt8ColumnGeneric(result Result, colIdx int) ([]int8, []bool, error) {
+	// Get result information
+	resultPtr := result.GetResultPointer()
+	rowCount := int(result.RowCount())
+
+	// Validate column index
+	if colIdx < 0 || colIdx >= result.ColumnCount() {
+		return nil, nil, fmt.Errorf("column index out of range: %d", colIdx)
+	}
+
+	// Validate column type
+	if result.ColumnType(colIdx) != C.DUCKDB_TYPE_TINYINT {
+		return nil, nil, fmt.Errorf("column %d is not a TINYINT", colIdx)
+	}
+
+	// Create output slices
+	values := make([]int8, rowCount)
+	nulls := make([]bool, rowCount)
+
+	// Use block-based extraction to reduce CGO boundary crossings
+	const blockSize = 64
+	cColIdx := C.idx_t(colIdx)
+
+	for startRow := 0; startRow < rowCount; startRow += blockSize {
+		// Calculate end of current block (handles final partial block)
+		endRow := startRow + blockSize
+		if endRow > rowCount {
+			endRow = rowCount
+		}
+		blockCount := endRow - startRow
+
+		// Process block of null values first
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			nulls[pos] = result.IsNull(colIdx, pos)
+		}
+
+		// Process block of actual values (only for non-null entries)
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			if !nulls[pos] {
+				values[pos] = int8(C.duckdb_value_int8(resultPtr, cColIdx, C.idx_t(pos)))
+			}
+		}
+	}
+
+	return values, nulls, nil
+}
+
+// ExtractInt16ColumnGeneric is a generic implementation for extracting int16 columns
+func ExtractInt16ColumnGeneric(result Result, colIdx int) ([]int16, []bool, error) {
+	// Get result information
+	resultPtr := result.GetResultPointer()
+	rowCount := int(result.RowCount())
+
+	// Validate column index
+	if colIdx < 0 || colIdx >= result.ColumnCount() {
+		return nil, nil, fmt.Errorf("column index out of range: %d", colIdx)
+	}
+
+	// Validate column type
+	if result.ColumnType(colIdx) != C.DUCKDB_TYPE_SMALLINT {
+		return nil, nil, fmt.Errorf("column %d is not a SMALLINT", colIdx)
+	}
+
+	// Create output slices
+	values := make([]int16, rowCount)
+	nulls := make([]bool, rowCount)
+
+	// Use block-based extraction to reduce CGO boundary crossings
+	const blockSize = 64
+	cColIdx := C.idx_t(colIdx)
+
+	for startRow := 0; startRow < rowCount; startRow += blockSize {
+		// Calculate end of current block (handles final partial block)
+		endRow := startRow + blockSize
+		if endRow > rowCount {
+			endRow = rowCount
+		}
+		blockCount := endRow - startRow
+
+		// Process block of null values first
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			nulls[pos] = result.IsNull(colIdx, pos)
+		}
+
+		// Process block of actual values (only for non-null entries)
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			if !nulls[pos] {
+				values[pos] = int16(C.duckdb_value_int16(resultPtr, cColIdx, C.idx_t(pos)))
+			}
+		}
+	}
+
+	return values, nulls, nil
+}
+
+// ExtractUint8ColumnGeneric is a generic implementation for extracting uint8 columns
+func ExtractUint8ColumnGeneric(result Result, colIdx int) ([]uint8, []bool, error) {
+	// Get result information
+	resultPtr := result.GetResultPointer()
+	rowCount := int(result.RowCount())
+
+	// Validate column index
+	if colIdx < 0 || colIdx >= result.ColumnCount() {
+		return nil, nil, fmt.Errorf("column index out of range: %d", colIdx)
+	}
+
+	// Validate column type
+	if result.ColumnType(colIdx) != C.DUCKDB_TYPE_UTINYINT {
+		return nil, nil, fmt.Errorf("column %d is not a UTINYINT", colIdx)
+	}
+
+	// Create output slices
+	values := make([]uint8, rowCount)
+	nulls := make([]bool, rowCount)
+
+	// Use block-based extraction to reduce CGO boundary crossings
+	const blockSize = 64
+	cColIdx := C.idx_t(colIdx)
+
+	for startRow := 0; startRow < rowCount; startRow += blockSize {
+		// Calculate end of current block (handles final partial block)
+		endRow := startRow + blockSize
+		if endRow > rowCount {
+			endRow = rowCount
+		}
+		blockCount := endRow - startRow
+
+		// Process block of null values first
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			nulls[pos] = result.IsNull(colIdx, pos)
+		}
+
+		// Process block of actual values (only for non-null entries)
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			if !nulls[pos] {
+				values[pos] = uint8(C.duckdb_value_uint8(resultPtr, cColIdx, C.idx_t(pos)))
+			}
+		}
+	}
+
+	return values, nulls, nil
+}
+
+// ExtractUint16ColumnGeneric is a generic implementation for extracting uint16 columns
+func ExtractUint16ColumnGeneric(result Result, colIdx int) ([]uint16, []bool, error) {
+	// Get result information
+	resultPtr := result.GetResultPointer()
+	rowCount := int(result.RowCount())
+
+	// Validate column index
+	if colIdx < 0 || colIdx >= result.ColumnCount() {
+		return nil, nil, fmt.Errorf("column index out of range: %d", colIdx)
+	}
+
+	// Validate column type
+	if result.ColumnType(colIdx) != C.DUCKDB_TYPE_USMALLINT {
+		return nil, nil, fmt.Errorf("column %d is not a USMALLINT", colIdx)
+	}
+
+	// Create output slices
+	values := make([]uint16, rowCount)
+	nulls := make([]bool, rowCount)
+
+	// Use block-based extraction to reduce CGO boundary crossings
+	const blockSize = 64
+	cColIdx := C.idx_t(colIdx)
+
+	for startRow := 0; startRow < rowCount; startRow += blockSize {
+		// Calculate end of current block (handles final partial block)
+		endRow := startRow + blockSize
+		if endRow > rowCount {
+			endRow = rowCount
+		}
+		blockCount := endRow - startRow
+
+		// Process block of null values first
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			nulls[pos] = result.IsNull(colIdx, pos)
+		}
+
+		// Process block of actual values (only for non-null entries)
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			if !nulls[pos] {
+				values[pos] = uint16(C.duckdb_value_uint16(resultPtr, cColIdx, C.idx_t(pos)))
+			}
+		}
+	}
+
+	return values, nulls, nil
+}
+
+// ExtractUint32ColumnGeneric is a generic implementation for extracting uint32 columns
+func ExtractUint32ColumnGeneric(result Result, colIdx int) ([]uint32, []bool, error) {
+	// Get result information
+	resultPtr := result.GetResultPointer()
+	rowCount := int(result.RowCount())
+
+	// Validate column index
+	if colIdx < 0 || colIdx >= result.ColumnCount() {
+		return nil, nil, fmt.Errorf("column index out of range: %d", colIdx)
+	}
+
+	// Validate column type
+	if result.ColumnType(colIdx) != C.DUCKDB_TYPE_UINTEGER {
+		return nil, nil, fmt.Errorf("column %d is not a UINTEGER", colIdx)
+	}
+
+	// Create output slices
+	values := make([]uint32, rowCount)
+	nulls := make([]bool, rowCount)
+
+	// Use block-based extraction to reduce CGO boundary crossings
+	const blockSize = 64
+	cColIdx := C.idx_t(colIdx)
+
+	for startRow := 0; startRow < rowCount; startRow += blockSize {
+		// Calculate end of current block (handles final partial block)
+		endRow := startRow + blockSize
+		if endRow > rowCount {
+			endRow = rowCount
+		}
+		blockCount := endRow - startRow
+
+		// Process block of null values first
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			nulls[pos] = result.IsNull(colIdx, pos)
+		}
+
+		// Process block of actual values (only for non-null entries)
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			if !nulls[pos] {
+				values[pos] = uint32(C.duckdb_value_uint32(resultPtr, cColIdx, C.idx_t(pos)))
+			}
+		}
+	}
+
+	return values, nulls, nil
+}
+
+// ExtractUint64ColumnGeneric is a generic implementation for extracting uint64 columns
+func ExtractUint64ColumnGeneric(result Result, colIdx int) ([]uint64, []bool, error) {
+	// Get result information
+	resultPtr := result.GetResultPointer()
+	rowCount := int(result.RowCount())
+
+	// Validate column index
+	if colIdx < 0 || colIdx >= result.ColumnCount() {
+		return nil, nil, fmt.Errorf("column index out of range: %d", colIdx)
+	}
+
+	// Validate column type
+	if result.ColumnType(colIdx) != C.DUCKDB_TYPE_UBIGINT {
+		return nil, nil, fmt.Errorf("column %d is not a UBIGINT", colIdx)
+	}
+
+	// Create output slices
+	values := make([]uint64, rowCount)
+	nulls := make([]bool, rowCount)
+
+	// Use block-based extraction to reduce CGO boundary crossings
+	const blockSize = 64
+	cColIdx := C.idx_t(colIdx)
+
+	for startRow := 0; startRow < rowCount; startRow += blockSize {
+		// Calculate end of current block (handles final partial block)
+		endRow := startRow + blockSize
+		if endRow > rowCount {
+			endRow = rowCount
+		}
+		blockCount := endRow - startRow
+
+		// Process block of null values first
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			nulls[pos] = result.IsNull(colIdx, pos)
+		}
+
+		// Process block of actual values (only for non-null entries)
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			if !nulls[pos] {
+				values[pos] = uint64(C.duckdb_value_uint64(resultPtr, cColIdx, C.idx_t(pos)))
+			}
+		}
+	}
+
+	return values, nulls, nil
+}
+
+// ExtractFloat32ColumnGeneric is a generic implementation for extracting float32 columns
+func ExtractFloat32ColumnGeneric(result Result, colIdx int) ([]float32, []bool, error) {
+	// Get result information
+	resultPtr := result.GetResultPointer()
+	rowCount := int(result.RowCount())
+
+	// Validate column index
+	if colIdx < 0 || colIdx >= result.ColumnCount() {
+		return nil, nil, fmt.Errorf("column index out of range: %d", colIdx)
+	}
+
+	// Validate column type
+	if result.ColumnType(colIdx) != C.DUCKDB_TYPE_FLOAT {
+		return nil, nil, fmt.Errorf("column %d is not a FLOAT", colIdx)
+	}
+
+	// Create output slices
+	values := make([]float32, rowCount)
+	nulls := make([]bool, rowCount)
+
+	// Use block-based extraction to reduce CGO boundary crossings
+	const blockSize = 64
+	cColIdx := C.idx_t(colIdx)
+
+	for startRow := 0; startRow < rowCount; startRow += blockSize {
+		// Calculate end of current block (handles final partial block)
+		endRow := startRow + blockSize
+		if endRow > rowCount {
+			endRow = rowCount
+		}
+		blockCount := endRow - startRow
+
+		// Process block of null values first
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			nulls[pos] = result.IsNull(colIdx, pos)
+		}
+
+		// Process block of actual values (only for non-null entries)
+		for i := 0; i < blockCount; i++ {
+			pos := startRow + i
+			if !nulls[pos] {
+				values[pos] = float32(C.duckdb_value_float(resultPtr, cColIdx, C.idx_t(pos)))
+			}
+		}
+	}
+
+	return values, nulls, nil
+}
+
 // ConvertTimestampToTime converts DuckDB timestamp (microseconds since epoch) to Go time.Time
 func ConvertTimestampToTime(micros int64) time.Time {
 	return time.Unix(micros/1000000, (micros%1000000)*1000)

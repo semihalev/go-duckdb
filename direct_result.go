@@ -823,47 +823,8 @@ func (dr *DirectResult) ExtractBool8Column(colIdx int) ([]bool, []bool, error) {
 		return nil, nil, ErrResultClosed
 	}
 
-	if colIdx < 0 || colIdx >= dr.columnCount {
-		return nil, nil, ErrInvalidColumnIndex
-	}
-
-	// Check column type
-	if dr.columnTypes[colIdx] != C.DUCKDB_TYPE_BOOLEAN {
-		return nil, nil, ErrIncompatibleType
-	}
-
-	// Create slices to hold the results
-	rowCount := int(dr.rowCount)
-	values := make([]bool, rowCount)
-	nulls := make([]bool, rowCount)
-
-	// Use block-based extraction to reduce CGO boundary crossings
-	// This processes data in chunks rather than row-by-row
-	const blockSize = 64
-	for startRow := 0; startRow < rowCount; startRow += blockSize {
-		// Calculate end of current block (handles final partial block)
-		endRow := startRow + blockSize
-		if endRow > rowCount {
-			endRow = rowCount
-		}
-		blockCount := endRow - startRow
-
-		// Process block of null values first
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			nulls[pos] = bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-		}
-
-		// Process block of actual values (only for non-null entries)
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			if !nulls[pos] {
-				values[pos] = bool(C.duckdb_value_boolean(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-			}
-		}
-	}
-
-	return values, nulls, nil
+	// Use the unified implementation
+	return ExtractBoolColumnGeneric(dr, colIdx)
 }
 
 // ExtractInt8Column extracts an int8 column
@@ -875,46 +836,8 @@ func (dr *DirectResult) ExtractInt8Column(colIdx int) ([]int8, []bool, error) {
 		return nil, nil, ErrResultClosed
 	}
 
-	if colIdx < 0 || colIdx >= dr.columnCount {
-		return nil, nil, ErrInvalidColumnIndex
-	}
-
-	// Check column type
-	if dr.columnTypes[colIdx] != C.DUCKDB_TYPE_TINYINT {
-		return nil, nil, ErrIncompatibleType
-	}
-
-	// Create slices to hold the results
-	rowCount := int(dr.rowCount)
-	values := make([]int8, rowCount)
-	nulls := make([]bool, rowCount)
-
-	// Use block-based extraction to reduce CGO boundary crossings
-	const blockSize = 64
-	for startRow := 0; startRow < rowCount; startRow += blockSize {
-		// Calculate end of current block (handles final partial block)
-		endRow := startRow + blockSize
-		if endRow > rowCount {
-			endRow = rowCount
-		}
-		blockCount := endRow - startRow
-
-		// Process block of null values first
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			nulls[pos] = bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-		}
-
-		// Process block of actual values (only for non-null entries)
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			if !nulls[pos] {
-				values[pos] = int8(C.duckdb_value_int8(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-			}
-		}
-	}
-
-	return values, nulls, nil
+	// Use the unified implementation
+	return ExtractInt8ColumnGeneric(dr, colIdx)
 }
 
 // ExtractInt16Column extracts an int16 column
@@ -926,46 +849,8 @@ func (dr *DirectResult) ExtractInt16Column(colIdx int) ([]int16, []bool, error) 
 		return nil, nil, ErrResultClosed
 	}
 
-	if colIdx < 0 || colIdx >= dr.columnCount {
-		return nil, nil, ErrInvalidColumnIndex
-	}
-
-	// Check column type
-	if dr.columnTypes[colIdx] != C.DUCKDB_TYPE_SMALLINT {
-		return nil, nil, ErrIncompatibleType
-	}
-
-	// Create slices to hold the results
-	rowCount := int(dr.rowCount)
-	values := make([]int16, rowCount)
-	nulls := make([]bool, rowCount)
-
-	// Use block-based extraction to reduce CGO boundary crossings
-	const blockSize = 64
-	for startRow := 0; startRow < rowCount; startRow += blockSize {
-		// Calculate end of current block (handles final partial block)
-		endRow := startRow + blockSize
-		if endRow > rowCount {
-			endRow = rowCount
-		}
-		blockCount := endRow - startRow
-
-		// Process block of null values first
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			nulls[pos] = bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-		}
-
-		// Process block of actual values (only for non-null entries)
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			if !nulls[pos] {
-				values[pos] = int16(C.duckdb_value_int16(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-			}
-		}
-	}
-
-	return values, nulls, nil
+	// Use the unified implementation
+	return ExtractInt16ColumnGeneric(dr, colIdx)
 }
 
 // ExtractUint8Column extracts a uint8 column
@@ -977,46 +862,8 @@ func (dr *DirectResult) ExtractUint8Column(colIdx int) ([]uint8, []bool, error) 
 		return nil, nil, ErrResultClosed
 	}
 
-	if colIdx < 0 || colIdx >= dr.columnCount {
-		return nil, nil, ErrInvalidColumnIndex
-	}
-
-	// Check column type
-	if dr.columnTypes[colIdx] != C.DUCKDB_TYPE_UTINYINT {
-		return nil, nil, ErrIncompatibleType
-	}
-
-	// Create slices to hold the results
-	rowCount := int(dr.rowCount)
-	values := make([]uint8, rowCount)
-	nulls := make([]bool, rowCount)
-
-	// Use block-based extraction to reduce CGO boundary crossings
-	const blockSize = 64
-	for startRow := 0; startRow < rowCount; startRow += blockSize {
-		// Calculate end of current block (handles final partial block)
-		endRow := startRow + blockSize
-		if endRow > rowCount {
-			endRow = rowCount
-		}
-		blockCount := endRow - startRow
-
-		// Process block of null values first
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			nulls[pos] = bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-		}
-
-		// Process block of actual values (only for non-null entries)
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			if !nulls[pos] {
-				values[pos] = uint8(C.duckdb_value_uint8(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-			}
-		}
-	}
-
-	return values, nulls, nil
+	// Use the unified implementation
+	return ExtractUint8ColumnGeneric(dr, colIdx)
 }
 
 // ExtractUint16Column extracts a uint16 column
@@ -1028,46 +875,8 @@ func (dr *DirectResult) ExtractUint16Column(colIdx int) ([]uint16, []bool, error
 		return nil, nil, ErrResultClosed
 	}
 
-	if colIdx < 0 || colIdx >= dr.columnCount {
-		return nil, nil, ErrInvalidColumnIndex
-	}
-
-	// Check column type
-	if dr.columnTypes[colIdx] != C.DUCKDB_TYPE_USMALLINT {
-		return nil, nil, ErrIncompatibleType
-	}
-
-	// Create slices to hold the results
-	rowCount := int(dr.rowCount)
-	values := make([]uint16, rowCount)
-	nulls := make([]bool, rowCount)
-
-	// Use block-based extraction to reduce CGO boundary crossings
-	const blockSize = 64
-	for startRow := 0; startRow < rowCount; startRow += blockSize {
-		// Calculate end of current block (handles final partial block)
-		endRow := startRow + blockSize
-		if endRow > rowCount {
-			endRow = rowCount
-		}
-		blockCount := endRow - startRow
-
-		// Process block of null values first
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			nulls[pos] = bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-		}
-
-		// Process block of actual values (only for non-null entries)
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			if !nulls[pos] {
-				values[pos] = uint16(C.duckdb_value_uint16(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-			}
-		}
-	}
-
-	return values, nulls, nil
+	// Use the unified implementation
+	return ExtractUint16ColumnGeneric(dr, colIdx)
 }
 
 // ExtractUint32Column extracts a uint32 column
@@ -1079,46 +888,8 @@ func (dr *DirectResult) ExtractUint32Column(colIdx int) ([]uint32, []bool, error
 		return nil, nil, ErrResultClosed
 	}
 
-	if colIdx < 0 || colIdx >= dr.columnCount {
-		return nil, nil, ErrInvalidColumnIndex
-	}
-
-	// Check column type
-	if dr.columnTypes[colIdx] != C.DUCKDB_TYPE_UINTEGER {
-		return nil, nil, ErrIncompatibleType
-	}
-
-	// Create slices to hold the results
-	rowCount := int(dr.rowCount)
-	values := make([]uint32, rowCount)
-	nulls := make([]bool, rowCount)
-
-	// Use block-based extraction to reduce CGO boundary crossings
-	const blockSize = 64
-	for startRow := 0; startRow < rowCount; startRow += blockSize {
-		// Calculate end of current block (handles final partial block)
-		endRow := startRow + blockSize
-		if endRow > rowCount {
-			endRow = rowCount
-		}
-		blockCount := endRow - startRow
-
-		// Process block of null values first
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			nulls[pos] = bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-		}
-
-		// Process block of actual values (only for non-null entries)
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			if !nulls[pos] {
-				values[pos] = uint32(C.duckdb_value_uint32(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-			}
-		}
-	}
-
-	return values, nulls, nil
+	// Use the unified implementation
+	return ExtractUint32ColumnGeneric(dr, colIdx)
 }
 
 // ExtractUint64Column extracts a uint64 column
@@ -1130,46 +901,8 @@ func (dr *DirectResult) ExtractUint64Column(colIdx int) ([]uint64, []bool, error
 		return nil, nil, ErrResultClosed
 	}
 
-	if colIdx < 0 || colIdx >= dr.columnCount {
-		return nil, nil, ErrInvalidColumnIndex
-	}
-
-	// Check column type
-	if dr.columnTypes[colIdx] != C.DUCKDB_TYPE_UBIGINT {
-		return nil, nil, ErrIncompatibleType
-	}
-
-	// Create slices to hold the results
-	rowCount := int(dr.rowCount)
-	values := make([]uint64, rowCount)
-	nulls := make([]bool, rowCount)
-
-	// Use block-based extraction to reduce CGO boundary crossings
-	const blockSize = 64
-	for startRow := 0; startRow < rowCount; startRow += blockSize {
-		// Calculate end of current block (handles final partial block)
-		endRow := startRow + blockSize
-		if endRow > rowCount {
-			endRow = rowCount
-		}
-		blockCount := endRow - startRow
-
-		// Process block of null values first
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			nulls[pos] = bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-		}
-
-		// Process block of actual values (only for non-null entries)
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			if !nulls[pos] {
-				values[pos] = uint64(C.duckdb_value_uint64(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-			}
-		}
-	}
-
-	return values, nulls, nil
+	// Use the unified implementation
+	return ExtractUint64ColumnGeneric(dr, colIdx)
 }
 
 // ExtractFloat32Column extracts a float32 column
@@ -1181,46 +914,8 @@ func (dr *DirectResult) ExtractFloat32Column(colIdx int) ([]float32, []bool, err
 		return nil, nil, ErrResultClosed
 	}
 
-	if colIdx < 0 || colIdx >= dr.columnCount {
-		return nil, nil, ErrInvalidColumnIndex
-	}
-
-	// Check column type
-	if dr.columnTypes[colIdx] != C.DUCKDB_TYPE_FLOAT {
-		return nil, nil, ErrIncompatibleType
-	}
-
-	// Create slices to hold the results
-	rowCount := int(dr.rowCount)
-	values := make([]float32, rowCount)
-	nulls := make([]bool, rowCount)
-
-	// Use block-based extraction to reduce CGO boundary crossings
-	const blockSize = 64
-	for startRow := 0; startRow < rowCount; startRow += blockSize {
-		// Calculate end of current block (handles final partial block)
-		endRow := startRow + blockSize
-		if endRow > rowCount {
-			endRow = rowCount
-		}
-		blockCount := endRow - startRow
-
-		// Process block of null values first
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			nulls[pos] = bool(C.duckdb_value_is_null(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-		}
-
-		// Process block of actual values (only for non-null entries)
-		for i := 0; i < blockCount; i++ {
-			pos := startRow + i
-			if !nulls[pos] {
-				values[pos] = float32(C.duckdb_value_float(dr.result, C.idx_t(colIdx), C.idx_t(pos)))
-			}
-		}
-	}
-
-	return values, nulls, nil
+	// Use the unified implementation
+	return ExtractFloat32ColumnGeneric(dr, colIdx)
 }
 
 // ExtractTimestampColumn extracts a timestamp column

@@ -527,6 +527,96 @@ func (r *Rows) ExtractDateColumn(colIdx int) ([]int32, []bool, error) {
 	return ExtractDateColumnGeneric(r, colIdx)
 }
 
+// ExtractBoolColumn extracts an entire boolean column
+func (r *Rows) ExtractBoolColumn(colIdx int) ([]bool, []bool, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
+		return nil, nil, io.ErrClosedPipe
+	}
+
+	// Use the unified implementation for boolean columns
+	return r.ExtractBool8Column(colIdx)
+}
+
+// ExtractBool8Column extracts an entire boolean column as []bool (not compressed)
+func (r *Rows) ExtractBool8Column(colIdx int) ([]bool, []bool, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
+		return nil, nil, io.ErrClosedPipe
+	}
+
+	// Use the unified implementation
+	return ExtractBoolColumnGeneric(r, colIdx)
+}
+
+// ExtractInt8Column extracts an entire int8 column
+func (r *Rows) ExtractInt8Column(colIdx int) ([]int8, []bool, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
+		return nil, nil, io.ErrClosedPipe
+	}
+
+	// Use the unified implementation
+	return ExtractInt8ColumnGeneric(r, colIdx)
+}
+
+// ExtractInt16Column extracts an entire int16 column
+func (r *Rows) ExtractInt16Column(colIdx int) ([]int16, []bool, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
+		return nil, nil, io.ErrClosedPipe
+	}
+
+	// Use the unified implementation
+	return ExtractInt16ColumnGeneric(r, colIdx)
+}
+
+// ExtractUint8Column extracts an entire uint8 column
+func (r *Rows) ExtractUint8Column(colIdx int) ([]uint8, []bool, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
+		return nil, nil, io.ErrClosedPipe
+	}
+
+	// Use the unified implementation
+	return ExtractUint8ColumnGeneric(r, colIdx)
+}
+
+// ExtractUint16Column extracts an entire uint16 column
+func (r *Rows) ExtractUint16Column(colIdx int) ([]uint16, []bool, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
+		return nil, nil, io.ErrClosedPipe
+	}
+
+	// Use the unified implementation
+	return ExtractUint16ColumnGeneric(r, colIdx)
+}
+
+// ExtractUint32Column extracts an entire uint32 column
+func (r *Rows) ExtractUint32Column(colIdx int) ([]uint32, []bool, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
+		return nil, nil, io.ErrClosedPipe
+	}
+
+	// Use the unified implementation
+	return ExtractUint32ColumnGeneric(r, colIdx)
+}
+
+// ExtractUint64Column extracts an entire uint64 column
+func (r *Rows) ExtractUint64Column(colIdx int) ([]uint64, []bool, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
+		return nil, nil, io.ErrClosedPipe
+	}
+
+	// Use the unified implementation
+	return ExtractUint64ColumnGeneric(r, colIdx)
+}
+
+// ExtractFloat32Column extracts an entire float32 column
+func (r *Rows) ExtractFloat32Column(colIdx int) ([]float32, []bool, error) {
+	if atomic.LoadInt32(&r.closed) != 0 {
+		return nil, nil, io.ErrClosedPipe
+	}
+
+	// Use the unified implementation
+	return ExtractFloat32ColumnGeneric(r, colIdx)
+}
+
 // QueryResult represents the result of a query execution.
 type QueryResult struct {
 	rowsAffected int64
