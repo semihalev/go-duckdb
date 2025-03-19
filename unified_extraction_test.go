@@ -381,8 +381,8 @@ func TestExtendedTypeDirectResult(t *testing.T) {
 
 	// Verify no null values
 	for i := 0; i < 100; i++ {
-		if boolNulls[i] || int8Nulls[i] || int16Nulls[i] || uint8Nulls[i] || 
-		   uint16Nulls[i] || uint32Nulls[i] || uint64Nulls[i] || float32Nulls[i] {
+		if boolNulls[i] || int8Nulls[i] || int16Nulls[i] || uint8Nulls[i] ||
+			uint16Nulls[i] || uint32Nulls[i] || uint64Nulls[i] || float32Nulls[i] {
 			t.Errorf("Found unexpected NULL value at index %d", i)
 		}
 	}
@@ -427,18 +427,18 @@ func TestExtendedTypeNullValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to run check query: %v", err)
 	}
-	
+
 	// Manually check the values to understand ordering
 	t.Log("Checking row order from direct SQL query:")
 	for i := 0; i < int(checkResult.RowCount()); i++ {
 		boolIsNull := checkResult.IsNull(0, i)
 		int8IsNull := checkResult.IsNull(1, i)
 		int16IsNull := checkResult.IsNull(2, i)
-		t.Logf("Row %d: bool_col NULL=%v, int8_col NULL=%v, int16_col NULL=%v", 
+		t.Logf("Row %d: bool_col NULL=%v, int8_col NULL=%v, int16_col NULL=%v",
 			i, boolIsNull, int8IsNull, int16IsNull)
 	}
 	checkResult.Close()
-	
+
 	// Use QueryDirectResult to get direct access to the result
 	result, err := db.QueryDirectResult("SELECT * FROM extended_nulls_test ORDER BY COALESCE(int8_col, 0)")
 	if err != nil {
@@ -451,11 +451,11 @@ func TestExtendedTypeNullValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract boolean column with nulls: %v", err)
 	}
-	
+
 	// Print debug info
 	t.Logf("Boolean values: %v", boolVals)
 	t.Logf("Boolean nulls: %v", boolNulls)
-	
+
 	// From our debug output, we can see the NULL booleans are at index 2
 	if !boolNulls[2] {
 		t.Errorf("Expected NULL for boolean at index 2")
@@ -466,11 +466,11 @@ func TestExtendedTypeNullValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract int8 column with nulls: %v", err)
 	}
-	
+
 	// Print debug info
 	t.Logf("Int8 values: %v", int8Vals)
 	t.Logf("Int8 nulls: %v", int8Nulls)
-	
+
 	// From our debug output, we can see the NULL int8 are at index 0
 	if !int8Nulls[0] {
 		t.Errorf("Expected NULL for int8 at index 0")
@@ -481,7 +481,7 @@ func TestExtendedTypeNullValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract int16 column with nulls: %v", err)
 	}
-	
+
 	// From the debug info, we can see the NULL int16 are at index 3
 	if !int16Nulls[3] {
 		t.Errorf("Expected NULL for int16 at index 3")
@@ -492,7 +492,7 @@ func TestExtendedTypeNullValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract uint8 column with nulls: %v", err)
 	}
-	
+
 	// Check the other columns to find the NULL index for the remaining columns
 	numRows := len(uint8Nulls)
 	foundNull := false
@@ -503,7 +503,7 @@ func TestExtendedTypeNullValues(t *testing.T) {
 			break
 		}
 	}
-	
+
 	if !foundNull {
 		t.Errorf("No NULL values found for uint8 column")
 	}
@@ -513,7 +513,7 @@ func TestExtendedTypeNullValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract uint16 column with nulls: %v", err)
 	}
-	
+
 	// Check for NULL values
 	foundNull = false
 	for i := 0; i < numRows; i++ {
@@ -523,7 +523,7 @@ func TestExtendedTypeNullValues(t *testing.T) {
 			break
 		}
 	}
-	
+
 	if !foundNull {
 		t.Errorf("No NULL values found for uint16 column")
 	}
@@ -533,7 +533,7 @@ func TestExtendedTypeNullValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract uint32 column with nulls: %v", err)
 	}
-	
+
 	// Check for NULL values
 	foundNull = false
 	for i := 0; i < numRows; i++ {
@@ -543,7 +543,7 @@ func TestExtendedTypeNullValues(t *testing.T) {
 			break
 		}
 	}
-	
+
 	if !foundNull {
 		t.Errorf("No NULL values found for uint32 column")
 	}
@@ -553,7 +553,7 @@ func TestExtendedTypeNullValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract uint64 column with nulls: %v", err)
 	}
-	
+
 	// Check for NULL values
 	foundNull = false
 	for i := 0; i < numRows; i++ {
@@ -563,7 +563,7 @@ func TestExtendedTypeNullValues(t *testing.T) {
 			break
 		}
 	}
-	
+
 	if !foundNull {
 		t.Errorf("No NULL values found for uint64 column")
 	}
@@ -573,7 +573,7 @@ func TestExtendedTypeNullValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract float32 column with nulls: %v", err)
 	}
-	
+
 	// Check for NULL values
 	foundNull = false
 	for i := 0; i < numRows; i++ {
@@ -583,7 +583,7 @@ func TestExtendedTypeNullValues(t *testing.T) {
 			break
 		}
 	}
-	
+
 	if !foundNull {
 		t.Errorf("No NULL values found for float32 column")
 	}
@@ -634,7 +634,7 @@ func TestRowsExtendedTypeExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to query row count: %v", err)
 	}
-	
+
 	// Get row count
 	var rowCount int
 	int64Vals, _, err := checkResult.ExtractInt64Column(0)
@@ -645,13 +645,13 @@ func TestRowsExtendedTypeExtraction(t *testing.T) {
 		rowCount = int(int64Vals[0])
 	}
 	checkResult.Close()
-	
+
 	t.Logf("Row count: %d", rowCount)
-	
+
 	// We know that in our test, the NULL values are at the last index
 	nullRowIndex := rowCount - 1
 	t.Logf("Using last row (index %d) as NULL row", nullRowIndex)
-	
+
 	// Now we know which row has the NULL values, let's query again and test
 	result, err := db.QueryDirectResult("SELECT * FROM rows_type_test")
 	if err != nil {
@@ -664,14 +664,14 @@ func TestRowsExtendedTypeExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract boolean column from rows: %v", err)
 	}
-	
+
 	t.Logf("Bool nulls: %v", boolNulls)
-	
+
 	// Verify that we got the correct number of values
 	if len(boolVals) != rowCount {
 		t.Errorf("Expected %d boolean values, got %d", rowCount, len(boolVals))
 	}
-	
+
 	// Verify the null value is at the expected index
 	if !boolNulls[nullRowIndex] {
 		t.Errorf("Expected NULL for boolean at index %d", nullRowIndex)
@@ -682,14 +682,14 @@ func TestRowsExtendedTypeExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract int8 column from rows: %v", err)
 	}
-	
+
 	t.Logf("Int8 nulls: %v", int8Nulls)
-	
+
 	// Verify we got the right number of values
 	if len(int8Vals) != rowCount {
 		t.Errorf("Expected %d int8 values, got %d", rowCount, len(int8Vals))
 	}
-	
+
 	// Verify the null value is at the expected index
 	if !int8Nulls[nullRowIndex] {
 		t.Errorf("Expected NULL for int8 at index %d", nullRowIndex)
@@ -700,12 +700,12 @@ func TestRowsExtendedTypeExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract int16 column from rows: %v", err)
 	}
-	
+
 	// Verify we got the right number of values
 	if len(int16Vals) != rowCount {
 		t.Errorf("Expected %d int16 values, got %d", rowCount, len(int16Vals))
 	}
-	
+
 	// Verify the null value is at the expected index
 	if !int16Nulls[nullRowIndex] {
 		t.Errorf("Expected NULL for int16 at index %d", nullRowIndex)
@@ -716,12 +716,12 @@ func TestRowsExtendedTypeExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract uint8 column from rows: %v", err)
 	}
-	
+
 	// Verify we got the right number of values
 	if len(uint8Vals) != rowCount {
 		t.Errorf("Expected %d uint8 values, got %d", rowCount, len(uint8Vals))
 	}
-	
+
 	// Verify the null value is at the expected index
 	if !uint8Nulls[nullRowIndex] {
 		t.Errorf("Expected NULL for uint8 at index %d", nullRowIndex)
@@ -732,12 +732,12 @@ func TestRowsExtendedTypeExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract uint16 column from rows: %v", err)
 	}
-	
+
 	// Verify we got the right number of values
 	if len(uint16Vals) != rowCount {
 		t.Errorf("Expected %d uint16 values, got %d", rowCount, len(uint16Vals))
 	}
-	
+
 	// Verify the null value is at the expected index
 	if !uint16Nulls[nullRowIndex] {
 		t.Errorf("Expected NULL for uint16 at index %d", nullRowIndex)
@@ -748,12 +748,12 @@ func TestRowsExtendedTypeExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract uint32 column from rows: %v", err)
 	}
-	
+
 	// Verify we got the right number of values
 	if len(uint32Vals) != rowCount {
 		t.Errorf("Expected %d uint32 values, got %d", rowCount, len(uint32Vals))
 	}
-	
+
 	// Verify the null value is at the expected index
 	if !uint32Nulls[nullRowIndex] {
 		t.Errorf("Expected NULL for uint32 at index %d", nullRowIndex)
@@ -764,12 +764,12 @@ func TestRowsExtendedTypeExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract uint64 column from rows: %v", err)
 	}
-	
+
 	// Verify we got the right number of values
 	if len(uint64Vals) != rowCount {
 		t.Errorf("Expected %d uint64 values, got %d", rowCount, len(uint64Vals))
 	}
-	
+
 	// Verify the null value is at the expected index
 	if !uint64Nulls[nullRowIndex] {
 		t.Errorf("Expected NULL for uint64 at index %d", nullRowIndex)
@@ -780,17 +780,17 @@ func TestRowsExtendedTypeExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to extract float32 column from rows: %v", err)
 	}
-	
+
 	// Verify we got the right number of values
 	if len(float32Vals) != rowCount {
 		t.Errorf("Expected %d float32 values, got %d", rowCount, len(float32Vals))
 	}
-	
+
 	// Verify the null value is at the expected index
 	if !float32Nulls[nullRowIndex] {
 		t.Errorf("Expected NULL for float32 at index %d", nullRowIndex)
 	}
-	
+
 	// Note: Since both Rows and DirectResult implement the ResultExtractor interface,
 	// they both use the same underlying generic extraction functions.
 	// So by testing the DirectResult implementation, we're effectively also testing
