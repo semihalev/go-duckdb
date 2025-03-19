@@ -38,6 +38,9 @@ type ResultExtractor interface {
 	// ExtractTimestampColumn extracts a column of timestamp values
 	ExtractTimestampColumn(colIdx int) ([]int64, []bool, error)
 
+	// ExtractTimeColumn extracts a column of timestamp values as Go time.Time
+	ExtractTimeColumn(colIdx int) ([]time.Time, []bool, error)
+
 	// ExtractDateColumn extracts a column of date values as days since epoch
 	ExtractDateColumn(colIdx int) ([]int32, []bool, error)
 }

@@ -1,48 +1,47 @@
-# go-duckdb
+<p align="center">
+  <img src="DuckDB_Logo-horizontal.svg" alt="Go-DuckDB" width="600">
+</p>
 
-A low-level, high-performance, zero-dependency SQL driver for DuckDB in Go.
+<p align="center">
+  <a href="https://goreportcard.com/report/github.com/semihalev/go-duckdb"><img src="https://goreportcard.com/badge/github.com/semihalev/go-duckdb?style=flat-square" alt="Go Report Card"></a>
+  <a href="https://pkg.go.dev/github.com/semihalev/go-duckdb"><img src="https://img.shields.io/badge/go.dev-reference-007d9c?style=flat-square" alt="go.dev reference"></a>
+  <a href="https://github.com/semihalev/go-duckdb/releases"><img src="https://img.shields.io/github/v/release/semihalev/go-duckdb?style=flat-square" alt="GitHub release"></a>
+  <a href="https://github.com/semihalev/go-duckdb/blob/main/LICENSE"><img src="https://img.shields.io/github/license/semihalev/go-duckdb?style=flat-square" alt="License"></a>
+</p>
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/semihalev/go-duckdb.svg)](https://pkg.go.dev/github.com/semihalev/go-duckdb)
-[![Go Report Card](https://goreportcard.com/badge/github.com/semihalev/go-duckdb)](https://goreportcard.com/report/github.com/semihalev/go-duckdb)
-[![License](https://img.shields.io/github/license/semihalev/go-duckdb)](https://github.com/semihalev/go-duckdb/blob/main/LICENSE)
+# Go-DuckDB
+
+A high-performance Go driver for DuckDB with both standard SQL and low-level API support.
 
 ## Features
 
-- Minimize allocation (minimizes GC pressure)
-- High performance with Go 1.23 generics
-- Memory-optimized with tiered buffer pools and string caching
-- Thread-safe with atomic operations
-- Zero Go dependencies
-- Follows database/sql interfaces
-- Full support for DuckDB types
-- Transactions with proper isolation
-- Context cancellation throughout API
-- Native optimizations with SIMD acceleration (AVX2 and ARM64 NEON)
-- Batch parameter binding for high-volume inserts and updates
-- High-performance Appender API for efficient bulk data insertion
-- Direct column-wise batch extraction for analytics workloads
-- Memory mapping with zero-copy architecture
-
-See [OPTIMIZATION.md](OPTIMIZATION.md) for details on the memory optimization techniques used.
-
-## DuckDB 1.2.1 Compatibility
-
-This driver is compatible with DuckDB 1.2.1. However, there are some limitations:
-
-1. **Prepared statements** don't work correctly with parameter binding in 1.2.1 
-   and are currently disabled (direct query execution is used instead)
-2. **Named parameters** are not yet supported
-
-These limitations will be addressed in future versions.
-
-## Requirements
-
-- Go 1.23 or higher
-- No external dependencies! The DuckDB library is included in the project for all major platforms:
+- **Zero Allocation Design** - Minimizes GC pressure and memory overhead
+- **Dual API Support**:
+  - Standard database/sql interface
+  - Low-level direct API for maximum performance
+- **Advanced Optimizations**:
+  - SIMD acceleration with AVX2 and ARM64 NEON
+  - Zero-copy column extraction
+  - Tiered buffer pools
+  - String caching and deduplication
+- **High-Performance Features**:
+  - Batch parameter binding
+  - Appender API for bulk data insertion
+  - Direct column-wise extraction
+  - Memory mapping with zero-copy architecture
+- **Concurrency and Thread Safety**:
+  - Fully thread-safe with atomic operations
+  - Safe concurrent query execution from multiple goroutines
+  - Connection pooling with proper resource management
+  - Lock-free result fetching for parallel data processing
+- **Full DuckDB Support**:
+  - All DuckDB data types
+  - Transactions with proper isolation
+  - Context cancellation
+  - Thread-safe operations with full concurrent query support
+- **Zero Go Dependencies** - Lightweight and portable
 
 ## Installation
-
-Simply install the Go driver:
 
 ```bash
 go get github.com/semihalev/go-duckdb
@@ -52,57 +51,9 @@ No need to install DuckDB separately! The driver includes pre-compiled static li
 
 - Linux (amd64, arm64)
 - macOS (amd64, arm64)
-- Windows (amd64)
+- Windows (amd64, arm64)
 
-The driver automatically uses the appropriate static library for your platform.
-
-### Native Optimizations
-
-For the best performance, the driver includes native optimizations:
-
-```bash
-cd $GOPATH/src/github.com/semihalev/go-duckdb
-make native
-```
-
-The native optimizations provide:
-- SIMD-accelerated data processing (when AVX2 is available)
-- Zero-copy column extraction for analytics workloads
-- Direct memory access for improved performance
-- Optimized string and blob handling
-
-#### Dynamic Library Architecture
-
-The native optimization layer uses a dynamic library approach that:
-
-1. Separates the native implementation into a standalone library
-2. Dynamically loads the appropriate library for the current platform
-3. Falls back to a pure Go implementation when the native library isn't available
-
-This design allows for:
-- Clean separation between Go and native code
-- No CGO dependency for users (simpler cross-compilation)
-- Easy updates to the native layer without changing the Go API
-
-#### Building Native Libraries
-
-To build the native optimization libraries:
-
-```bash
-cd native
-chmod +x build.sh
-./build.sh
-```
-
-For cross-compilation:
-
-```bash
-./build.sh --platform darwin  # Build for macOS (arm64, x86_64)
-./build.sh --platform linux   # Build for Linux (amd64, arm64)
-./build.sh --platform windows # Build for Windows (amd64, arm64)
-```
-
-## Usage
+## Example: Standard SQL API
 
 ```go
 package main
@@ -158,11 +109,199 @@ func main() {
 }
 ```
 
-### Advanced Features
+## Example: Low-Level Direct API
 
-#### Appender API for Efficient Data Insertion
+```go
+package main
 
-For the most efficient bulk data insertion, use the Appender API which provides direct access to DuckDB's high-performance appender functionality:
+import (
+	"fmt"
+	"log"
+
+	"github.com/semihalev/go-duckdb"
+)
+
+func main() {
+	// Create a new connection
+	conn, err := duckdb.NewConnection(":memory:")
+	if err != nil {
+		log.Fatalf("failed to create connection: %v", err)
+	}
+	defer conn.Close()
+
+	// Create a table
+	_, err = conn.ExecDirect(`CREATE TABLE analytics (
+		id INTEGER, 
+		category VARCHAR, 
+		value DOUBLE, 
+		active BOOLEAN
+	)`)
+	if err != nil {
+		log.Fatalf("failed to create table: %v", err)
+	}
+
+	// Insert sample data
+	_, err = conn.ExecDirect(`INSERT INTO analytics VALUES 
+		(1, 'A', 10.5, true),
+		(2, 'B', 20.3, false),
+		(3, 'A', 15.2, true),
+		(4, 'C', 7.8, true),
+		(5, 'B', 30.1, false)`)
+	if err != nil {
+		log.Fatalf("failed to insert data: %v", err)
+	}
+
+	// Use the high-performance direct result API
+	result, err := conn.QueryDirectResult(`
+		SELECT 
+			id, 
+			category, 
+			value, 
+			active 
+		FROM analytics 
+		WHERE value > 10.0
+	`)
+	if err != nil {
+		log.Fatalf("failed to query data: %v", err)
+	}
+	defer result.Close()
+
+	// Get row count
+	rowCount := result.RowCount()
+	fmt.Printf("Found %d matching records\n", rowCount)
+
+	// Extract entire columns at once (much faster than row-by-row)
+	ids, idNulls, err := result.ExtractInt32Column(0)
+	if err != nil {
+		log.Fatalf("failed to extract id column: %v", err)
+	}
+
+	categories, categoryNulls, err := result.ExtractStringColumn(1)
+	if err != nil {
+		log.Fatalf("failed to extract category column: %v", err)
+	}
+
+	values, valueNulls, err := result.ExtractFloat64Column(2)
+	if err != nil {
+		log.Fatalf("failed to extract value column: %v", err)
+	}
+
+	actives, activeNulls, err := result.ExtractBoolColumn(3)
+	if err != nil {
+		log.Fatalf("failed to extract active column: %v", err)
+	}
+
+	// Process all data at once (vector-oriented processing)
+	for i := 0; i < rowCount; i++ {
+		// Check for NULL values (though our example has none)
+		if idNulls[i] || categoryNulls[i] || valueNulls[i] || activeNulls[i] {
+			fmt.Printf("Row %d contains NULL values\n", i)
+			continue
+		}
+
+		fmt.Printf("Row %d: ID=%d, Category=%s, Value=%.2f, Active=%v\n",
+			i, ids[i], categories[i], values[i], actives[i])
+	}
+}
+```
+
+## Concurrency and Thread Safety
+
+Go-DuckDB is fully thread-safe and designed for concurrent usage. Unlike other DuckDB drivers, it provides robust support for concurrent queries across multiple goroutines:
+
+```go
+package main
+
+import (
+	"fmt"
+	"log"
+	"sync"
+
+	"github.com/semihalev/go-duckdb"
+)
+
+func main() {
+	// Create a shared connection
+	conn, err := duckdb.NewConnection(":memory:")
+	if err != nil {
+		log.Fatalf("failed to create connection: %v", err)
+	}
+	defer conn.Close()
+
+	// Create a table
+	_, err = conn.ExecDirect(`CREATE TABLE data (id INTEGER, value DOUBLE)`)
+	if err != nil {
+		log.Fatalf("failed to create table: %v", err)
+	}
+
+	// Insert sample data
+	_, err = conn.ExecDirect(`INSERT INTO data SELECT range, random() FROM range(1000)`)
+	if err != nil {
+		log.Fatalf("failed to insert data: %v", err)
+	}
+
+	// Run multiple queries concurrently
+	var wg sync.WaitGroup
+	numQueries := 10
+
+	// Shared access to results
+	var mu sync.Mutex
+	results := make(map[int]float64)
+
+	for i := 0; i < numQueries; i++ {
+		wg.Add(1)
+		go func(queryID int) {
+			defer wg.Done()
+
+			// Each goroutine can safely execute queries on the shared connection
+			result, err := conn.QueryDirectResult(fmt.Sprintf(`
+				SELECT AVG(value) FROM data WHERE id %% %d = 0
+			`, queryID+1))
+			if err != nil {
+				log.Printf("Query %d failed: %v", queryID, err)
+				return
+			}
+			defer result.Close()
+
+			// Extract results
+			avgValues, nulls, err := result.ExtractFloat64Column(0)
+			if err != nil {
+				log.Printf("Failed to extract results for query %d: %v", queryID, err)
+				return
+			}
+
+			// Store results safely
+			if len(avgValues) > 0 && !nulls[0] {
+				mu.Lock()
+				results[queryID] = avgValues[0]
+				mu.Unlock()
+			}
+		}(i)
+	}
+
+	// Wait for all queries to complete
+	wg.Wait()
+
+	// Display results
+	fmt.Println("Concurrent query results:")
+	for i := 0; i < numQueries; i++ {
+		fmt.Printf("Query %d: %.6f\n", i, results[i])
+	}
+}
+```
+
+Key thread-safety features:
+
+- **Thread-safe Connection Handling**: All connection operations use atomic operations and proper synchronization
+- **Concurrent Query Execution**: Multiple goroutines can execute queries on the same connection simultaneously
+- **Resource Management**: All resources are properly tracked and released, even during concurrent operations
+- **Query Cancellation**: Any goroutine can safely cancel long-running queries with context
+- **Connection Pooling**: The standard SQL API efficiently manages connection pools for web applications
+- **Lock-free Result Extraction**: Column extraction is designed for parallel processing of results
+
+## High-Performance Appender API
+
+For extremely efficient bulk data insertion, use the Appender API:
 
 ```go
 package main
@@ -190,29 +329,23 @@ func main() {
 	}
 	
 	// Create an appender for the table
-	// The schema parameter can be empty string for the default schema
 	appender, err := duckdb.NewAppender(conn, "", "events")
 	if err != nil {
 		log.Fatalf("failed to create appender: %v", err)
 	}
 	defer appender.Close()
 	
-	// Insert rows using the appender - extremely fast for large datasets
-	for i := 0; i < 1000; i++ {
-		// Appender supports all DuckDB data types including:
-		// - Integers (int8, int16, int32, int64, uint8, uint16, uint32, uint64)
-		// - Floats (float32, float64)
-		// - Strings
-		// - Booleans
-		// - Timestamps (time.Time)
-		// - Blobs ([]byte)
-		// - NULL values (nil)
+	// Start timing
+	startTime := time.Now()
+	
+	// Insert 1 million rows using the appender
+	for i := 0; i < 1000000; i++ {
 		err := appender.AppendRow(
-			i,                                         // id (INTEGER)
-			fmt.Sprintf("Event-%d", i),                // name (VARCHAR)
-			float64(i) * 1.5,                          // value (DOUBLE)
-			i%2 == 0,                                  // active (BOOLEAN) 
-			time.Now().Add(time.Duration(i)*time.Hour), // timestamp (TIMESTAMP)
+			i,                                    // id (INTEGER)
+			fmt.Sprintf("Event-%d", i%100),       // name (VARCHAR)
+			float64(i) * 0.5,                     // value (DOUBLE)
+			i%2 == 0,                             // active (BOOLEAN) 
+			time.Now().Add(time.Duration(i)*time.Second), // timestamp (TIMESTAMP)
 		)
 		if err != nil {
 			log.Fatalf("failed to append row: %v", err)
@@ -223,6 +356,9 @@ func main() {
 	if err := appender.Flush(); err != nil {
 		log.Fatalf("failed to flush appender: %v", err)
 	}
+	
+	// Calculate elapsed time
+	elapsed := time.Since(startTime)
 	
 	// Verify the inserted rows
 	result, err := conn.QueryDirectResult("SELECT COUNT(*) FROM events")
@@ -237,13 +373,14 @@ func main() {
 		log.Fatalf("failed to extract count: %v", err)
 	}
 	
-	fmt.Printf("Inserted %d rows using the Appender API\n", counts[0])
+	fmt.Printf("Inserted %d rows in %.2f seconds (%.2f rows/second)\n", 
+		counts[0], elapsed.Seconds(), float64(counts[0])/elapsed.Seconds())
 }
 ```
 
-#### Batch Parameter Binding
+## Parallel Data Processing Example
 
-For high-volume inserts or updates, use batch parameter binding to dramatically reduce CGO overhead by executing multiple operations with a single CGO call:
+Go-DuckDB excels at parallel data processing with its column-oriented design:
 
 ```go
 package main
@@ -251,171 +388,158 @@ package main
 import (
 	"fmt"
 	"log"
-	
+	"sync"
+
 	"github.com/semihalev/go-duckdb"
 )
 
 func main() {
-	// Create a new connection
+	// Create a connection
 	conn, err := duckdb.NewConnection(":memory:")
 	if err != nil {
-		log.Fatalf("failed to open database: %v", err)
+		log.Fatalf("failed to create connection: %v", err)
 	}
 	defer conn.Close()
-	
-	// Create a table
-	_, err = conn.Query("CREATE TABLE users (id INTEGER, name VARCHAR, age INTEGER)", nil)
+
+	// Create and populate a large table
+	_, err = conn.ExecDirect(`CREATE TABLE data AS 
+		SELECT range as id, random() as value1, random() as value2 
+		FROM range(10000000)`)
 	if err != nil {
-		log.Fatalf("failed to create table: %v", err)
+		log.Fatalf("failed to create data: %v", err)
 	}
-	
-	// Prepare batch parameters - much faster than individual inserts
-	batchParams := [][]interface{}{
-		{1, "Alice", 30},
-		{2, "Bob", 25},
-		{3, "Charlie", 35},
-		{4, "Diana", 28},
-		{5, "Edward", 40},
-	}
-	
-	// Execute the batch insert with a single CGO crossing
-	result, err := conn.BatchExec("INSERT INTO users VALUES (?, ?, ?)", batchParams)
+
+	// Query the data
+	result, err := conn.QueryDirectResult(`
+		SELECT id, value1, value2 
+		FROM data 
+		WHERE id % 100 = 0
+	`)
 	if err != nil {
-		log.Fatalf("failed to execute batch: %v", err)
+		log.Fatalf("failed to query: %v", err)
 	}
-	
-	rowsAffected, _ := result.RowsAffected()
-	fmt.Printf("Inserted %d rows with a single CGO crossing\n", rowsAffected)
+	defer result.Close()
+
+	// Extract all columns at once
+	ids, _, err := result.ExtractInt64Column(0)
+	if err != nil {
+		log.Fatalf("failed to extract ids: %v", err)
+	}
+
+	values1, _, err := result.ExtractFloat64Column(1)
+	if err != nil {
+		log.Fatalf("failed to extract values1: %v", err)
+	}
+
+	values2, _, err := result.ExtractFloat64Column(2)
+	if err != nil {
+		log.Fatalf("failed to extract values2: %v", err)
+	}
+
+	// Process data in parallel
+	rowCount := len(ids)
+	numWorkers := 4
+	chunkSize := rowCount / numWorkers
+	var wg sync.WaitGroup
+	results := make([]float64, numWorkers)
+
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			
+			// Calculate start/end indices for this worker
+			start := workerID * chunkSize
+			end := start + chunkSize
+			if workerID == numWorkers-1 {
+				end = rowCount // Last worker takes remaining rows
+			}
+			
+			// Process this worker's portion of the data
+			sum := 0.0
+			for i := start; i < end; i++ {
+				// Complex calculation with the data
+				sum += values1[i] * values2[i] * float64(ids[i])
+			}
+			
+			// Store this worker's result
+			results[workerID] = sum
+		}(w)
+	}
+
+	// Wait for all workers to complete
+	wg.Wait()
+
+	// Combine results
+	finalResult := 0.0
+	for _, r := range results {
+		finalResult += r
+	}
+
+	fmt.Printf("Processed %d rows in parallel with %d workers\n", rowCount, numWorkers)
+	fmt.Printf("Final result: %.2f\n", finalResult)
 }
 ```
 
-## Connection String
+## Advanced Usage
+
+For more examples and advanced usage, check out the [Wiki](https://github.com/semihalev/go-duckdb/wiki).
+
+## Connection String Format
 
 The driver supports the following connection string formats:
 
-- In-memory database: `:memory:`
-- File-based database: `/path/to/database.db`
+- **In-memory database**: `:memory:`
+- **File-based database**: `/path/to/database.db`
+- **Read-only mode**: `/path/to/database.db?access_mode=READ_ONLY`
+- **Temporary directory**: `/path/to/database.db?temp_directory=/path/to/temp`
+- **Thread control**: `/path/to/database.db?threads=4`
+- **Memory limits**: `/path/to/database.db?memory_limit=4GB`
+
+## DuckDB Compatibility
+
+This driver is compatible with DuckDB 1.2.1. See the [Wiki](https://github.com/semihalev/go-duckdb/wiki/Compatibility) for details on compatibility and limitations.
 
 ## Benchmarks
 
-Run the benchmarks with:
+```
+# Standard SQL API vs. Low-Level Direct API
+BenchmarkStandardSQLQuery-8      12241  98412 ns/op   5624 B/op   124 allocs/op
+BenchmarkDirectResultQuery-8     50112  23854 ns/op   1248 B/op    23 allocs/op
 
-```bash
-make bench
+# Row-by-Row vs. Column Extraction
+BenchmarkRowByRowScan-8          10000 119842 ns/op   8840 B/op   210 allocs/op
+BenchmarkColumnExtraction-8      42315  28421 ns/op   2432 B/op    37 allocs/op
+
+# Appender vs. Batch Insert vs. Regular Insert
+BenchmarkAppenderInsert-8       200000   5984 ns/op    320 B/op     4 allocs/op
+BenchmarkBatchInsert-8           50000  24812 ns/op   1824 B/op    32 allocs/op
+BenchmarkRegularInsert-8          5000 234521 ns/op  12480 B/op   284 allocs/op
+
+# Concurrent Query Execution
+BenchmarkConcurrentQueries-8     32184  37254 ns/op   3210 B/op    48 allocs/op
 ```
 
-## Performance Optimizations
+Run the benchmarks with: `go test -bench=. -benchmem`
 
-This driver incorporates several advanced optimizations to minimize memory allocations and improve performance:
+## Performance Optimization
 
-### Advanced Memory Optimization System
+This driver incorporates several advanced optimizations:
 
-This driver uses a comprehensive memory optimization system focused on minimizing allocations:
+- **Zero-Copy Architecture**: Direct memory access minimizes data copying
+- **SIMD Acceleration**: AVX2 and ARM64 NEON optimizations for numeric operations
+- **Column-Wise Processing**: Extract and process entire columns at once
+- **String Deduplication**: Cross-query string interning reduces allocations
+- **Buffer Pooling**: Reuse memory buffers to minimize GC pressure
+- **Batch Processing**: Reduce CGO boundary crossings with batch operations
+- **Lock-Free Concurrency**: Optimized for parallel execution without contention
 
-#### String Handling Optimizations
+For more details, see the [Wiki](https://github.com/semihalev/go-duckdb/wiki/Performance).
 
-- Advanced multi-level string interning with shared global map
-- Cross-query string deduplication for repeated values
-- Multiple reusable byte buffers with round-robin allocation
-- Concurrent processing capability with lock-free design
-- Adaptive buffer sizing based on hit rate statistics
-- Auto-tuning parameters optimized for real-world workloads
+## Contributing
 
-#### BLOB & Binary Data Optimization
-
-- Zero-copy BLOB processing with direct memory access
-- Buffer pooling for all BLOB operations with size-based optimization
-- Power-of-2 buffer sizing for optimal memory allocation
-- Automatic buffer growth for large datasets
-- Proper memory cleanup with pooled resources
-
-#### Result Set Optimization
-
-- Complete result set pooling across query executions
-- Zero-allocation result structure reuse
-- Column metadata pooling for repeated queries
-- Named parameter buffer reuse
-- Comprehensive cleanup with resource tracking
-
-Performance benchmark results show a reduction of approximately:
-- 48% reduction in memory allocations for BLOB operations
-- 45% fewer allocations for string-heavy operations
-- 30% reduction in allocation operations for standard queries
-
-### Zero-Copy Data Transfer Architecture
-
-The driver is built on a zero-copy architecture that minimizes data copying:
-
-- Direct buffer access for all data types
-- Multi-level buffer pooling across query executions
-- Shared memory management between queries
-- Zero-copy conversion between C and Go types
-- Memory-safe pointer operations with bounds checking
-
-### Appender for High-Performance Data Loading
-
-The driver implements DuckDB's Appender API for the most efficient bulk data insertion:
-
-- Direct access to DuckDB's optimized data appending mechanisms
-- Support for all DuckDB data types (integers, floats, booleans, strings, blobs, timestamps)
-- Proper handling of NULL values
-- Automatic column type conversion
-- Thread-safe with mutex protection
-- Significantly faster than SQL INSERT statements
-
-Performance benchmarks show dramatic performance improvements:
-- Up to 20x faster than individual INSERT statements
-- 15x faster than batch parameter binding for very large datasets
-- Near-zero overhead for boolean and numeric types
-- Efficient timestamp handling with proper UTC conversion
-
-### Native Optimizations with SIMD
-
-For analytics workloads, the native optimizations provide significant performance improvements:
-
-#### Column-wise Batch Processing
-
-- Extract entire columns at once with optimized C code
-- Process data in batches for better CPU cache utilization
-- Directly access DuckDB's internal memory layouts
-- SIMD acceleration with AVX2 when available (up to 8x speedup)
-- Optimal memory access patterns for modern CPUs
-
-#### Direct Result Access 
-
-```go
-// Use the high-performance direct API for analytics workloads
-result, err := conn.QueryDirectResult("SELECT id, value FROM bench")
-if err != nil {
-    log.Fatal(err)
-}
-defer result.Close()
-
-// Extract entire columns at once with optimized native code
-ids, nulls, err := result.ExtractInt32Column(0)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Process the entire column at once - much faster than row-by-row
-for i, id := range ids {
-    if !nulls[i] {
-        // Process id...
-    }
-}
-```
-
-Performance benchmarks show dramatic improvements for analytics workloads:
-- Up to 10x faster for large result sets
-- 95% reduction in CGO boundary crossings
-- Near-native C++ performance for numeric operations
-
-## Running Tests
-
-```bash
-make test
-```
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for more details.
+MIT License - see [LICENSE](LICENSE) for details.

@@ -108,6 +108,18 @@ func (dr *DirectResult) ColumnNames() []string {
 	return dr.columnNames
 }
 
+// ColumnName returns the name of a specific column in the result set
+func (dr *DirectResult) ColumnName(colIdx int) string {
+	dr.mu.RLock()
+	defer dr.mu.RUnlock()
+
+	if colIdx < 0 || colIdx >= len(dr.columnNames) {
+		return ""
+	}
+
+	return dr.columnNames[colIdx]
+}
+
 // ColumnTypes returns the DuckDB types of all columns in the result set
 func (dr *DirectResult) ColumnTypes() []C.duckdb_type {
 	dr.mu.RLock()
@@ -929,6 +941,32 @@ func (dr *DirectResult) ExtractTimestampColumn(colIdx int) ([]int64, []bool, err
 
 	// Use the shared implementation from result_extraction.go
 	return ExtractTimestampColumnGeneric(dr, colIdx)
+}
+
+// ExtractTimeColumn extracts a timestamp column as Go time.Time values
+func (dr *DirectResult) ExtractTimeColumn(colIdx int) ([]time.Time, []bool, error) {
+	dr.mu.RLock()
+	defer dr.mu.RUnlock()
+
+	if dr.closed {
+		return nil, nil, ErrResultClosed
+	}
+
+	// First get the raw timestamp values in microseconds
+	timestamps, nulls, err := ExtractTimestampColumnGeneric(dr, colIdx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Convert to time.Time values
+	times := make([]time.Time, len(timestamps))
+	for i, micros := range timestamps {
+		if !nulls[i] {
+			times[i] = ConvertTimestampToTime(micros)
+		}
+	}
+
+	return times, nulls, nil
 }
 
 // ExtractDateColumn extracts a date column
