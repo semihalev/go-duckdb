@@ -4,7 +4,6 @@ package duckdb
 #include <stdlib.h>
 #include <string.h>
 #include <duckdb.h>
-#include "include/duckdb_native.h"
 */
 import "C"
 
@@ -274,7 +273,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 
 		// Extract null values for this block
 		for i := 0; i < actualBlockSize; i++ {
-			rowIdx := cStartRow + C.idx_t(blockStart + i)
+			rowIdx := cStartRow + C.idx_t(blockStart+i)
 			isNull := C.duckdb_value_is_null(bq.result, cColIdx, rowIdx)
 			vector.nullMap[blockStart+i] = cBoolToGo(isNull)
 		}
@@ -285,7 +284,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 			// Extract boolean values for this block
 			for i := 0; i < actualBlockSize; i++ {
 				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					rowIdx := cStartRow + C.idx_t(blockStart+i)
 					val := C.duckdb_value_boolean(bq.result, cColIdx, rowIdx)
 					vector.boolData[blockStart+i] = cBoolToGo(val)
 				}
@@ -295,7 +294,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 			// Extract int8 values for this block
 			for i := 0; i < actualBlockSize; i++ {
 				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					rowIdx := cStartRow + C.idx_t(blockStart+i)
 					val := C.duckdb_value_int8(bq.result, cColIdx, rowIdx)
 					vector.int8Data[blockStart+i] = int8(val)
 				}
@@ -305,7 +304,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 			// Extract int16 values for this block
 			for i := 0; i < actualBlockSize; i++ {
 				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					rowIdx := cStartRow + C.idx_t(blockStart+i)
 					val := C.duckdb_value_int16(bq.result, cColIdx, rowIdx)
 					vector.int16Data[blockStart+i] = int16(val)
 				}
@@ -327,7 +326,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 					// Extract non-null values efficiently
 					for i := 0; i < actualBlockSize; i++ {
 						if !vector.nullMap[blockStart+i] {
-							rowIdx := cStartRow + C.idx_t(blockStart + i)
+							rowIdx := cStartRow + C.idx_t(blockStart+i)
 							val := C.duckdb_value_int32(bq.result, cColIdx, rowIdx)
 							vector.int32Data[blockStart+i] = int32(val)
 						}
@@ -351,7 +350,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 					// Extract non-null values efficiently
 					for i := 0; i < actualBlockSize; i++ {
 						if !vector.nullMap[blockStart+i] {
-							rowIdx := cStartRow + C.idx_t(blockStart + i)
+							rowIdx := cStartRow + C.idx_t(blockStart+i)
 							val := C.duckdb_value_int64(bq.result, cColIdx, rowIdx)
 							vector.int64Data[blockStart+i] = int64(val)
 						}
@@ -363,7 +362,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 			// Extract float32 values for this block
 			for i := 0; i < actualBlockSize; i++ {
 				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					rowIdx := cStartRow + C.idx_t(blockStart+i)
 					val := C.duckdb_value_float(bq.result, cColIdx, rowIdx)
 					vector.float32Data[blockStart+i] = float32(val)
 				}
@@ -373,7 +372,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 			// Extract float64 values for this block
 			for i := 0; i < actualBlockSize; i++ {
 				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					rowIdx := cStartRow + C.idx_t(blockStart+i)
 					val := C.duckdb_value_double(bq.result, cColIdx, rowIdx)
 					vector.float64Data[blockStart+i] = float64(val)
 				}
@@ -383,7 +382,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 			// Extract string values for this block
 			for i := 0; i < actualBlockSize; i++ {
 				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					rowIdx := cStartRow + C.idx_t(blockStart+i)
 					cstr := C.duckdb_value_varchar(bq.result, cColIdx, rowIdx)
 					if cstr != nil {
 						vector.stringData[blockStart+i] = C.GoString(cstr)
@@ -398,7 +397,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 			// Extract blob values for this block
 			for i := 0; i < actualBlockSize; i++ {
 				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					rowIdx := cStartRow + C.idx_t(blockStart+i)
 					blob := C.duckdb_value_blob(bq.result, cColIdx, rowIdx)
 
 					// Handle blob data safely to prevent memory leaks
@@ -428,7 +427,7 @@ func (bq *BatchQuery) extractColumnBatch(colIdx int, startRow int, batchSize int
 			// For other types, convert to string for now
 			for i := 0; i < actualBlockSize; i++ {
 				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart + i)
+					rowIdx := cStartRow + C.idx_t(blockStart+i)
 					cstr := C.duckdb_value_varchar(bq.result, cColIdx, rowIdx)
 					if cstr != nil {
 						vector.timeData[blockStart+i] = C.GoString(cstr)

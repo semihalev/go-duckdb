@@ -4,7 +4,6 @@ package duckdb
 #include <stdlib.h>
 #include <stdbool.h>
 #include <duckdb.h>
-#include "include/duckdb_native.h"
 */
 import "C"
 import (
@@ -13,7 +12,6 @@ import (
 	"runtime"
 	"sync"
 	"time"
-	"unsafe"
 )
 
 // ParallelExtractor provides methods to extract multiple columns of the same type
@@ -434,7 +432,7 @@ func (pe *ParallelExtractor) extractChunk(colIdx int, startRow, endRow int) (int
 }
 
 // extractInt32ColumnThreadSafe extracts an int32 column directly for a specific range in a thread-safe manner
-// Uses specialized C function to avoid CGO thread issues with row-by-row extraction
+// Uses block-based approach to minimize CGO overhead
 func extractInt32ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowCount int) ([]int32, []bool, error) {
 	if colIdx < 0 || colIdx >= dr.columnCount {
 		return nil, nil, ErrInvalidColumnIndex
@@ -471,34 +469,44 @@ func extractInt32ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowCou
 	if dr.closed {
 		return nil, nil, ErrResultClosed
 	}
-
-	// Get pointers to Go slices using a safer approach
-	// This avoids the deprecated reflect.SliceHeader approach
-	var valuesPtr unsafe.Pointer
-	var nullsPtr unsafe.Pointer
-
-	if len(values) > 0 {
-		valuesPtr = unsafe.Pointer(&values[0])
+	
+	// Define block size for processing to reduce CGO boundary crossings
+	const blockSize = 64
+	
+	// Convert to C index
+	cColIdx := C.idx_t(colIdx)
+	
+	// Process the data in blocks to minimize CGO boundary crossings
+	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
+		// Calculate actual block size (might be smaller at the end)
+		blockEnd := blockStart + blockSize
+		if blockEnd > rowCount {
+			blockEnd = rowCount
+		}
+		actualBlockSize := blockEnd - blockStart
+		
+		// Extract null values for this block
+		for i := 0; i < actualBlockSize; i++ {
+			rowIdx := C.idx_t(startRow + blockStart + i)
+			isNull := C.duckdb_value_is_null(dr.result, cColIdx, rowIdx)
+			nulls[blockStart+i] = cBoolToGo(isNull)
+		}
+		
+		// Extract non-null values
+		for i := 0; i < actualBlockSize; i++ {
+			if !nulls[blockStart+i] {
+				rowIdx := C.idx_t(startRow + blockStart + i)
+				val := C.duckdb_value_int32(dr.result, cColIdx, rowIdx)
+				values[blockStart+i] = int32(val)
+			}
+		}
 	}
-	if len(nulls) > 0 {
-		nullsPtr = unsafe.Pointer(&nulls[0])
-	}
-
-	// Call optimized C function with proper offset
-	C.extract_int32_column(
-		dr.result,
-		C.idx_t(colIdx),
-		(*C.int32_t)(valuesPtr),
-		(*C.bool)(nullsPtr),
-		C.idx_t(startRow),
-		C.idx_t(rowCount),
-	)
 
 	return values, nulls, nil
 }
 
 // extractInt64ColumnThreadSafe extracts an int64 column directly for a specific range in a thread-safe manner
-// Uses specialized C function to avoid CGO thread issues with row-by-row extraction
+// Uses block-based approach to minimize CGO overhead
 func extractInt64ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowCount int) ([]int64, []bool, error) {
 	if colIdx < 0 || colIdx >= dr.columnCount {
 		return nil, nil, ErrInvalidColumnIndex
@@ -535,34 +543,44 @@ func extractInt64ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowCou
 	if dr.closed {
 		return nil, nil, ErrResultClosed
 	}
-
-	// Get pointers to Go slices using a safer approach
-	// This avoids the deprecated reflect.SliceHeader approach
-	var valuesPtr unsafe.Pointer
-	var nullsPtr unsafe.Pointer
-
-	if len(values) > 0 {
-		valuesPtr = unsafe.Pointer(&values[0])
+	
+	// Define block size for processing to reduce CGO boundary crossings
+	const blockSize = 64
+	
+	// Convert to C index
+	cColIdx := C.idx_t(colIdx)
+	
+	// Process the data in blocks to minimize CGO boundary crossings
+	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
+		// Calculate actual block size (might be smaller at the end)
+		blockEnd := blockStart + blockSize
+		if blockEnd > rowCount {
+			blockEnd = rowCount
+		}
+		actualBlockSize := blockEnd - blockStart
+		
+		// Extract null values for this block
+		for i := 0; i < actualBlockSize; i++ {
+			rowIdx := C.idx_t(startRow + blockStart + i)
+			isNull := C.duckdb_value_is_null(dr.result, cColIdx, rowIdx)
+			nulls[blockStart+i] = cBoolToGo(isNull)
+		}
+		
+		// Extract non-null values
+		for i := 0; i < actualBlockSize; i++ {
+			if !nulls[blockStart+i] {
+				rowIdx := C.idx_t(startRow + blockStart + i)
+				val := C.duckdb_value_int64(dr.result, cColIdx, rowIdx)
+				values[blockStart+i] = int64(val)
+			}
+		}
 	}
-	if len(nulls) > 0 {
-		nullsPtr = unsafe.Pointer(&nulls[0])
-	}
-
-	// Call optimized C function with proper offset
-	C.extract_int64_column(
-		dr.result,
-		C.idx_t(colIdx),
-		(*C.int64_t)(valuesPtr),
-		(*C.bool)(nullsPtr),
-		C.idx_t(startRow),
-		C.idx_t(rowCount),
-	)
 
 	return values, nulls, nil
 }
 
 // extractFloat64ColumnThreadSafe extracts a float64 column directly for a specific range in a thread-safe manner
-// Uses specialized C function to avoid CGO thread issues with row-by-row extraction
+// Uses block-based approach to minimize CGO overhead
 func extractFloat64ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowCount int) ([]float64, []bool, error) {
 	if colIdx < 0 || colIdx >= dr.columnCount {
 		return nil, nil, ErrInvalidColumnIndex
@@ -599,28 +617,38 @@ func extractFloat64ColumnThreadSafe(dr *DirectResult, colIdx int, startRow, rowC
 	if dr.closed {
 		return nil, nil, ErrResultClosed
 	}
-
-	// Get pointers to Go slices using a safer approach
-	// This avoids the deprecated reflect.SliceHeader approach
-	var valuesPtr unsafe.Pointer
-	var nullsPtr unsafe.Pointer
-
-	if len(values) > 0 {
-		valuesPtr = unsafe.Pointer(&values[0])
+	
+	// Define block size for processing to reduce CGO boundary crossings
+	const blockSize = 64
+	
+	// Convert to C index
+	cColIdx := C.idx_t(colIdx)
+	
+	// Process the data in blocks to minimize CGO boundary crossings
+	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
+		// Calculate actual block size (might be smaller at the end)
+		blockEnd := blockStart + blockSize
+		if blockEnd > rowCount {
+			blockEnd = rowCount
+		}
+		actualBlockSize := blockEnd - blockStart
+		
+		// Extract null values for this block
+		for i := 0; i < actualBlockSize; i++ {
+			rowIdx := C.idx_t(startRow + blockStart + i)
+			isNull := C.duckdb_value_is_null(dr.result, cColIdx, rowIdx)
+			nulls[blockStart+i] = cBoolToGo(isNull)
+		}
+		
+		// Extract non-null values
+		for i := 0; i < actualBlockSize; i++ {
+			if !nulls[blockStart+i] {
+				rowIdx := C.idx_t(startRow + blockStart + i)
+				val := C.duckdb_value_double(dr.result, cColIdx, rowIdx)
+				values[blockStart+i] = float64(val)
+			}
+		}
 	}
-	if len(nulls) > 0 {
-		nullsPtr = unsafe.Pointer(&nulls[0])
-	}
-
-	// Call optimized C function with proper offset
-	C.extract_float64_column(
-		dr.result,
-		C.idx_t(colIdx),
-		(*C.double)(valuesPtr),
-		(*C.bool)(nullsPtr),
-		C.idx_t(startRow),
-		C.idx_t(rowCount),
-	)
 
 	return values, nulls, nil
 }

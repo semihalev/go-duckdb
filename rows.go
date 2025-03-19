@@ -6,35 +6,6 @@ package duckdb
 #include <stdlib.h>
 #include <string.h>
 #include <duckdb.h>
-#include "include/duckdb_native.h"
-
-// Wrapper functions for our optimized native code
-// These call the native implementation through the C API
-
-static inline void extractInt32Column(duckdb_result *result, idx_t col_idx, int32_t *out_buffer, bool *null_mask) {
-    // Call the native optimized implementation
-    extract_int32_column(result, col_idx, out_buffer, null_mask, 0, duckdb_row_count(result));
-}
-
-static inline void extractInt64Column(duckdb_result *result, idx_t col_idx, int64_t *out_buffer, bool *null_mask) {
-    // Call the native optimized implementation
-    extract_int64_column(result, col_idx, out_buffer, null_mask, 0, duckdb_row_count(result));
-}
-
-static inline void extractFloat64Column(duckdb_result *result, idx_t col_idx, double *out_buffer, bool *null_mask) {
-    // Call the native optimized implementation
-    extract_float64_column(result, col_idx, out_buffer, null_mask, 0, duckdb_row_count(result));
-}
-
-static inline void extractTimestampColumn(duckdb_result *result, idx_t col_idx, int64_t *out_buffer, bool *null_mask) {
-    // Call the native optimized implementation
-    extract_timestamp_column(result, col_idx, out_buffer, null_mask, 0, duckdb_row_count(result));
-}
-
-static inline void extractDateColumn(duckdb_result *result, idx_t col_idx, int32_t *out_buffer, bool *null_mask) {
-    // Call the native optimized implementation
-    extract_date_column(result, col_idx, out_buffer, null_mask, 0, duckdb_row_count(result));
-}
 */
 import "C"
 
@@ -452,7 +423,7 @@ func (r *Rows) NextResultSet() error {
 // These helper methods enable batch extraction of entire columns at once
 // for improved performance with large datasets
 
-// ExtractInt32Column extracts an entire int32 column using optimized native code
+// ExtractInt32Column extracts an entire int32 column using block-based pure Go code
 // Returns the values and null indicators
 func (r *Rows) ExtractInt32Column(colIdx int) ([]int32, []bool, error) {
 	if atomic.LoadInt32(&r.closed) != 0 {
@@ -480,31 +451,42 @@ func (r *Rows) ExtractInt32Column(colIdx int) ([]int32, []bool, error) {
 		resultPtr = r.result
 	}
 
-	// Get pointers to Go slices for C to write directly into
-	// Using safer approach with unsafe.Pointer instead of reflect.SliceHeader for Go 1.17+ compatibility
-	var valuesPtr unsafe.Pointer
-	var nullsPtr unsafe.Pointer
+	// Define block size for processing to reduce CGO boundary crossings
+	const blockSize = 64
 
-	if len(values) > 0 {
-		valuesPtr = unsafe.Pointer(&values[0])
-	}
-	if len(nulls) > 0 {
-		nullsPtr = unsafe.Pointer(&nulls[0])
-	}
+	// Convert to C index
+	cColIdx := C.idx_t(colIdx)
 
-	// Extract data using our optimized native code
-	// This uses SIMD and other optimizations when available
-	C.extractInt32Column(
-		resultPtr,
-		C.idx_t(colIdx),
-		(*C.int32_t)(valuesPtr),
-		(*C.bool)(nullsPtr),
-	)
+	// Process the data in blocks to minimize CGO boundary crossings
+	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
+		// Calculate actual block size (might be smaller at the end)
+		blockEnd := blockStart + blockSize
+		if blockEnd > rowCount {
+			blockEnd = rowCount
+		}
+		actualBlockSize := blockEnd - blockStart
+
+		// Extract null values for this block
+		for i := 0; i < actualBlockSize; i++ {
+			rowIdx := C.idx_t(blockStart + i)
+			isNull := C.duckdb_value_is_null(resultPtr, cColIdx, rowIdx)
+			nulls[blockStart+i] = cBoolToGo(isNull)
+		}
+
+		// Extract non-null values
+		for i := 0; i < actualBlockSize; i++ {
+			if !nulls[blockStart+i] {
+				rowIdx := C.idx_t(blockStart + i)
+				val := C.duckdb_value_int32(resultPtr, cColIdx, rowIdx)
+				values[blockStart+i] = int32(val)
+			}
+		}
+	}
 
 	return values, nulls, nil
 }
 
-// ExtractInt64Column extracts an entire int64 column using optimized native code
+// ExtractInt64Column extracts an entire int64 column using block-based pure Go code
 func (r *Rows) ExtractInt64Column(colIdx int) ([]int64, []bool, error) {
 	if atomic.LoadInt32(&r.closed) != 0 {
 		return nil, nil, io.ErrClosedPipe
@@ -530,31 +512,43 @@ func (r *Rows) ExtractInt64Column(colIdx int) ([]int64, []bool, error) {
 	} else {
 		resultPtr = r.result
 	}
-
-	// Get pointers to Go slices for C to write directly into
-	// Using safer approach with unsafe.Pointer instead of reflect.SliceHeader for Go 1.17+ compatibility
-	var valuesPtr unsafe.Pointer
-	var nullsPtr unsafe.Pointer
-
-	if len(values) > 0 {
-		valuesPtr = unsafe.Pointer(&values[0])
+	
+	// Define block size for processing to reduce CGO boundary crossings
+	const blockSize = 64
+	
+	// Convert to C index
+	cColIdx := C.idx_t(colIdx)
+	
+	// Process the data in blocks to minimize CGO boundary crossings
+	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
+		// Calculate actual block size (might be smaller at the end)
+		blockEnd := blockStart + blockSize
+		if blockEnd > rowCount {
+			blockEnd = rowCount
+		}
+		actualBlockSize := blockEnd - blockStart
+		
+		// Extract null values for this block
+		for i := 0; i < actualBlockSize; i++ {
+			rowIdx := C.idx_t(blockStart + i)
+			isNull := C.duckdb_value_is_null(resultPtr, cColIdx, rowIdx)
+			nulls[blockStart+i] = cBoolToGo(isNull)
+		}
+		
+		// Extract non-null values
+		for i := 0; i < actualBlockSize; i++ {
+			if !nulls[blockStart+i] {
+				rowIdx := C.idx_t(blockStart + i)
+				val := C.duckdb_value_int64(resultPtr, cColIdx, rowIdx)
+				values[blockStart+i] = int64(val)
+			}
+		}
 	}
-	if len(nulls) > 0 {
-		nullsPtr = unsafe.Pointer(&nulls[0])
-	}
-
-	// Extract data using our optimized native code
-	C.extractInt64Column(
-		resultPtr,
-		C.idx_t(colIdx),
-		(*C.int64_t)(valuesPtr),
-		(*C.bool)(nullsPtr),
-	)
 
 	return values, nulls, nil
 }
 
-// ExtractFloat64Column extracts an entire float64 column using optimized native code
+// ExtractFloat64Column extracts an entire float64 column using block-based pure Go code
 func (r *Rows) ExtractFloat64Column(colIdx int) ([]float64, []bool, error) {
 	if atomic.LoadInt32(&r.closed) != 0 {
 		return nil, nil, io.ErrClosedPipe
@@ -580,31 +574,44 @@ func (r *Rows) ExtractFloat64Column(colIdx int) ([]float64, []bool, error) {
 	} else {
 		resultPtr = r.result
 	}
-
-	// Get pointers to Go slices for C to write directly into
-	// Using safer approach with unsafe.Pointer instead of reflect.SliceHeader for Go 1.17+ compatibility
-	var valuesPtr unsafe.Pointer
-	var nullsPtr unsafe.Pointer
-
-	if len(values) > 0 {
-		valuesPtr = unsafe.Pointer(&values[0])
+	
+	// Define block size for processing to reduce CGO boundary crossings
+	const blockSize = 64
+	
+	// Convert to C index
+	cColIdx := C.idx_t(colIdx)
+	
+	// Process the data in blocks to minimize CGO boundary crossings
+	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
+		// Calculate actual block size (might be smaller at the end)
+		blockEnd := blockStart + blockSize
+		if blockEnd > rowCount {
+			blockEnd = rowCount
+		}
+		actualBlockSize := blockEnd - blockStart
+		
+		// Extract null values for this block
+		for i := 0; i < actualBlockSize; i++ {
+			rowIdx := C.idx_t(blockStart + i)
+			isNull := C.duckdb_value_is_null(resultPtr, cColIdx, rowIdx)
+			nulls[blockStart+i] = cBoolToGo(isNull)
+		}
+		
+		// Extract non-null values
+		for i := 0; i < actualBlockSize; i++ {
+			if !nulls[blockStart+i] {
+				rowIdx := C.idx_t(blockStart + i)
+				val := C.duckdb_value_double(resultPtr, cColIdx, rowIdx)
+				values[blockStart+i] = float64(val)
+			}
+		}
 	}
-	if len(nulls) > 0 {
-		nullsPtr = unsafe.Pointer(&nulls[0])
-	}
-
-	// Extract data using our optimized native code
-	C.extractFloat64Column(
-		resultPtr,
-		C.idx_t(colIdx),
-		(*C.double)(valuesPtr),
-		(*C.bool)(nullsPtr),
-	)
 
 	return values, nulls, nil
 }
 
 // ExtractTimestampColumn extracts an entire timestamp column as microseconds since epoch
+// using block-based pure Go code
 func (r *Rows) ExtractTimestampColumn(colIdx int) ([]int64, []bool, error) {
 	if atomic.LoadInt32(&r.closed) != 0 {
 		return nil, nil, io.ErrClosedPipe
@@ -630,31 +637,44 @@ func (r *Rows) ExtractTimestampColumn(colIdx int) ([]int64, []bool, error) {
 	} else {
 		resultPtr = r.result
 	}
-
-	// Get pointers to Go slices for C to write directly into
-	// Using safer approach with unsafe.Pointer instead of reflect.SliceHeader for Go 1.17+ compatibility
-	var valuesPtr unsafe.Pointer
-	var nullsPtr unsafe.Pointer
-
-	if len(values) > 0 {
-		valuesPtr = unsafe.Pointer(&values[0])
+	
+	// Define block size for processing to reduce CGO boundary crossings
+	const blockSize = 64
+	
+	// Convert to C index
+	cColIdx := C.idx_t(colIdx)
+	
+	// Process the data in blocks to minimize CGO boundary crossings
+	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
+		// Calculate actual block size (might be smaller at the end)
+		blockEnd := blockStart + blockSize
+		if blockEnd > rowCount {
+			blockEnd = rowCount
+		}
+		actualBlockSize := blockEnd - blockStart
+		
+		// Extract null values for this block
+		for i := 0; i < actualBlockSize; i++ {
+			rowIdx := C.idx_t(blockStart + i)
+			isNull := C.duckdb_value_is_null(resultPtr, cColIdx, rowIdx)
+			nulls[blockStart+i] = cBoolToGo(isNull)
+		}
+		
+		// Extract non-null values
+		for i := 0; i < actualBlockSize; i++ {
+			if !nulls[blockStart+i] {
+				rowIdx := C.idx_t(blockStart + i)
+				ts := C.duckdb_value_timestamp(resultPtr, cColIdx, rowIdx)
+				values[blockStart+i] = int64(ts.micros)
+			}
+		}
 	}
-	if len(nulls) > 0 {
-		nullsPtr = unsafe.Pointer(&nulls[0])
-	}
-
-	// Extract data using our optimized native code
-	C.extractTimestampColumn(
-		resultPtr,
-		C.idx_t(colIdx),
-		(*C.int64_t)(valuesPtr),
-		(*C.bool)(nullsPtr),
-	)
 
 	return values, nulls, nil
 }
 
 // ExtractDateColumn extracts an entire date column as days since epoch
+// using block-based pure Go code
 func (r *Rows) ExtractDateColumn(colIdx int) ([]int32, []bool, error) {
 	if atomic.LoadInt32(&r.closed) != 0 {
 		return nil, nil, io.ErrClosedPipe
@@ -680,26 +700,38 @@ func (r *Rows) ExtractDateColumn(colIdx int) ([]int32, []bool, error) {
 	} else {
 		resultPtr = r.result
 	}
-
-	// Get pointers to Go slices for C to write directly into
-	// Using safer approach with unsafe.Pointer instead of reflect.SliceHeader for Go 1.17+ compatibility
-	var valuesPtr unsafe.Pointer
-	var nullsPtr unsafe.Pointer
-
-	if len(values) > 0 {
-		valuesPtr = unsafe.Pointer(&values[0])
+	
+	// Define block size for processing to reduce CGO boundary crossings
+	const blockSize = 64
+	
+	// Convert to C index
+	cColIdx := C.idx_t(colIdx)
+	
+	// Process the data in blocks to minimize CGO boundary crossings
+	for blockStart := 0; blockStart < rowCount; blockStart += blockSize {
+		// Calculate actual block size (might be smaller at the end)
+		blockEnd := blockStart + blockSize
+		if blockEnd > rowCount {
+			blockEnd = rowCount
+		}
+		actualBlockSize := blockEnd - blockStart
+		
+		// Extract null values for this block
+		for i := 0; i < actualBlockSize; i++ {
+			rowIdx := C.idx_t(blockStart + i)
+			isNull := C.duckdb_value_is_null(resultPtr, cColIdx, rowIdx)
+			nulls[blockStart+i] = cBoolToGo(isNull)
+		}
+		
+		// Extract non-null values
+		for i := 0; i < actualBlockSize; i++ {
+			if !nulls[blockStart+i] {
+				rowIdx := C.idx_t(blockStart + i)
+				date := C.duckdb_value_date(resultPtr, cColIdx, rowIdx)
+				values[blockStart+i] = int32(date.days)
+			}
+		}
 	}
-	if len(nulls) > 0 {
-		nullsPtr = unsafe.Pointer(&nulls[0])
-	}
-
-	// Extract data using our optimized native code
-	C.extractDateColumn(
-		resultPtr,
-		C.idx_t(colIdx),
-		(*C.int32_t)(valuesPtr),
-		(*C.bool)(nullsPtr),
-	)
 
 	return values, nulls, nil
 }

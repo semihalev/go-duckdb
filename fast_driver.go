@@ -48,7 +48,7 @@ func (conn *Connection) fastExecDirect(query string) (driver.Result, error) {
 	buffer := GetBuffer()
 	defer PutBuffer(buffer)
 
-	// Execute query with vectorized C adapter
+	// Execute query with our vectorized shim function
 	result := C.execute_query_vectorized(*conn.conn, cQuery, buffer)
 
 	if result == 0 {
@@ -147,7 +147,7 @@ func (conn *Connection) FastQuery(query string) (driver.Rows, error) {
 	// Get buffer from pool
 	buffer := GetBuffer()
 
-	// Execute query with vectorized C adapter
+	// Execute query with our vectorized shim function
 	result := C.execute_query_vectorized(*conn.conn, cQuery, buffer)
 	if result == 0 {
 		// Return buffer to pool on error

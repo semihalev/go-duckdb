@@ -110,6 +110,9 @@ typedef struct {
 // Execute a query and store the entire result set in a single operation
 int execute_query_vectorized(duckdb_connection connection, const char* query, result_buffer_t* buffer);
 
+// Simplified version of execute_query_vectorized that's embedded directly in Go code
+int execute_query_vectorized_shim(duckdb_connection connection, const char* query, result_buffer_t* buffer);
+
 // Execute a prepared statement and store the result set
 // Parameters are bound directly to the statement before calling this function
 int execute_prepared_vectorized(duckdb_prepared_statement statement, 

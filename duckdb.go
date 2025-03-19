@@ -1453,8 +1453,6 @@ func GetPreallocatedVector(duckDBType int, elementSize int) *SafeColumnVector {
 
 // Driver implements the database/sql/driver.Driver interface.
 type Driver struct {
-	// Whether to use the fast driver implementation
-	useFastDriver bool
 }
 
 // Open opens a new connection to the database using memory database as default.
