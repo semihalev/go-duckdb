@@ -20,7 +20,6 @@ Go-DuckDB is a Go driver for DuckDB, focusing on high performance with native op
 - `connection.go` - Connection represents a connection to a DuckDB database with CGO bindings
 - `duckdb.go` - Core package implementation
 - `direct_result.go` - Result handling with native optimizations
-- `parallel_api.go` - API for parallel execution patterns
 - `vector.go` - DuckDB vector implementation with efficient data access and minimal CGO crossings
 - `batch_query.go` - Batch-oriented query processing for high-performance column-wise data extraction
 - `vector_pool.go` - Memory pooling for column vectors to minimize allocations
@@ -30,7 +29,6 @@ Go-DuckDB is a Go driver for DuckDB, focusing on high performance with native op
 - `columnar_result.go` - Columnar result representation for efficient data access
 - `errors.go` - Error definitions and handling for DuckDB operations
 - `fast_driver.go` - High-performance driver implementation
-- `parallel_aggregation.go` - Parallel aggregation operations implementation
 - `prepared_direct.go` - Direct access to prepared statements for optimal performance
 - `rows.go` - Implementation of Go's database/sql Rows interface
 - `statement.go` - SQL statement handling and execution

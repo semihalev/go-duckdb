@@ -22,25 +22,6 @@ This document highlights critical issues, unused methods, and performance bottle
 - **Lock contention** (Lines 110-125): In `maybeCleanup()` can impact performance under high concurrency.
 - **Global bottleneck** (Lines 142-153): Global buffer pool instance could become a bottleneck in high-concurrency applications.
 
-## parallel_api.go
-
-### Critical Issues
-- ✅ **FIXED: Error handling issues** (Lines 673-690): Updated to collect and report all errors from error channels instead of just the first one.
-- ✅ **FIXED: Unsafe memory operations** (Lines 383-393, 447-457, 511-521): Fixed deprecated reflect.SliceHeader with a proper approach using unsafe.Pointer(&slice[0]) pattern.
-- ✅ **FIXED: Lock consistency problems** (Line 266-282): extractChunk now properly acquires and releases locks when accessing DirectResult data.
-- ✅ **FIXED: No timeout handling** (Lines 564-565): Added a timeout context to prevent the operation from potentially blocking forever.
-
-### Unused Code
-- **Unused counter** (Line 553, 639-642): `processedCount` is tracked but never used anywhere.
-- **Limited data type support** (Lines 263-326): `extractChunk` only handles 3 data types (INTEGER, BIGINT, DOUBLE) but not others like VARCHAR, BLOB, etc.
-
-### Performance Bottlenecks
-- **Sequential extraction** (Lines 38-50, 95-107, 152-164): Sequential extraction of all columns before parallel processing, creating a significant bottleneck.
-- **Limited parallelism** (Lines 538-542): `maxParallel` is hardcoded to maximum 4, potentially underutilizing systems with more cores.
-- **Inefficient data structures** (Lines 607-608): Maps (colData, nullMasks) used instead of slice-based data structures, adding overhead during extraction.
-- **Redundant validation** (Lines 512-518): Column index validation done in a separate loop requiring iteration over all indices before any work begins.
-- **Lock overhead** (Lines 520-527): Row count retrieval requires lock acquisition, but could potentially be optimized.
-
 ## batch_query.go
 
 ### Critical Issues
@@ -64,12 +45,10 @@ This document highlights critical issues, unused methods, and performance bottle
 - **Fixed batch size** (Line 22): The batch size is fixed at creation time rather than being dynamically adjusted based on query characteristics or memory pressure.
 - ✅ **IMPROVED: Missing vectorized processing**: Implemented block-based extraction that processes data in chunks, reducing per-row iteration overhead by ~64x in typical batches.
 
-## native_result.go
+## direct_result.go
 
 ### Critical Issues
 - ✅ **FIXED: Duplicate functionality** (Lines 230-232): Added proper deprecation notices to `ExtractStringColumnZeroCopy` to clarify its purpose and direct users to the true zero-copy method.
-- ✅ **FIXED: Threading issue** (Lines 2373-2412): Fixed `extractColumnsParallel` to properly collect and report all errors from concurrent column extractions, not just the first one.
-- ✅ **FIXED: Thread safety concerns** (Lines 66-125): Improved StringTable thread safety by adding a mutex to ensure atomicity of operations across multiple maps, implemented double-checking pattern, and added proper nil handling.
 - ✅ **FIXED: Format string vulnerability** (Line 1206): Fixed by using constant format strings with proper error wrapping instead of dynamically constructed error messages.
 
 ### Unused Code
@@ -216,12 +195,12 @@ This document highlights critical issues, unused methods, and performance bottle
 ## Priority Recommendations
 
 ✅ 1. **Fix race conditions** in buffer_pool.go, batch_query.go, and string_cache.go which could cause crashes or memory corruption.
-✅ 2. **Address resource leaks** in connection handling and result processing (fixed in parallel_api.go, batch_query.go, connection.go, and statement.go).
+✅ 2. **Address resource leaks** in connection handling and result processing (fixed in batch_query.go, connection.go, and statement.go).
 ✅ 3. **Optimize CGO boundary crossings** which are significant performance bottlenecks (implemented block-based processing in batch_query.go, reducing CGO calls by ~64x).
 ✅ 4. **Implement proper context handling** to ensure resources are released on cancellation (fixed in batch_query.go, connection.go, and statement.go).
 5. **Reduce code duplication** through refactoring common patterns and extraction methods.
-✅ 6. **Replace unsafe reflect.SliceHeader usage** with unsafe.Slice (Go 1.17+) to prevent future compatibility issues (fixed in parallel_api.go and rows.go).
-✅ 7. **Improve thread safety** with consistent locking patterns (fixed in buffer_pool.go, batch_query.go, parallel_api.go, connection.go, string_cache.go, and statement.go).
+✅ 6. **Replace unsafe reflect.SliceHeader usage** with unsafe.Slice (Go 1.17+) to prevent future compatibility issues (fixed in  rows.go).
+✅ 7. **Improve thread safety** with consistent locking patterns (fixed in buffer_pool.go, batch_query.go, connection.go, string_cache.go, and statement.go).
 ✅ 8. **Fix unsafe empty BLOB handling** in statement.go and batch_query.go to prevent potential memory corruption.
 ✅ 9. **Add transaction support for appender** to ensure atomicity and prevent partial commits.
 ✅ 10. **Add proper memory management** for native resources (implemented comprehensive vector pooling in column_vector_pool.go).
@@ -266,12 +245,6 @@ This document highlights critical issues, unused methods, and performance bottle
   - Implemented double-checking pattern to handle race conditions
   - Added proper nil pointer handling for safety
   - Improved error handling with better documentation
-
-- ✅ **Error handling in parallel extraction** (native_result.go): Fixed error collection in `extractColumnsParallel`.
-  - Now collects and reports all errors from parallel goroutines
-  - Provides detailed error information for debugging
-  - Creates a combined error message for better diagnostics
-  - Properly drains the error channel to avoid leaking resources
 
 - ✅ **Ambiguous APIs** (native_result.go): Clarified ambiguous API methods.
   - Added proper deprecation notice to `ExtractStringColumnZeroCopy`
