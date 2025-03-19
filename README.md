@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="duckdb_logo.svg" alt="Go-DuckDB" width="600">
+  <img src="duckdb_logo.svg" alt="DuckDB Logo" height="100">
 </p>
 
 <p align="center">

@@ -1,36 +1,33 @@
 <svg xmlns="http://www.w3.org/2000/svg" 
     xmlns:xlink="http://www.w3.org/1999/xlink" 
-    id="Ebene_1" 
     x="0" 
     y="0" 
     version="1.1" 
     viewBox="0 0 1209.5 344.4" 
-    style="enable-background:new 0 0 1209.5 344.4" 
     xml:space="preserve">
-  <style type="text/css">
-    .lt0{fill:#000000}
-    .ci0{fill:#000000}
-    .st0{fill:#fff100}
+  <style>
     @media (prefers-color-scheme: dark) {
-        html[data-color-mode="auto"] .lt0 {
+        .lt0 {
             fill: #ffffff;
         }
-        html[data-color-mode="auto"] .ci0 {
+        .ci0 {
             fill: #fff100;
         }
-        html[data-color-mode="auto"] .st0 {
+         .st0 {
             fill: #000000;
         }
     }
-    html[data-color-mode="dark"] .lt0 {
-        fill: #ffffff;
+    @media (prefers-color-scheme: light) {
+        .lt0 {
+            fill: #000000;
+        }
+        .ci0 {
+            fill: #000000;
+        }
+         .st0 {
+            fill: #fff100;
+        }
     }
-    html[data-color-mode="dark"] .ci0 {
-        fill: #fff100;
-    }
-    html[data-color-mode="dark"] .st0 {
-        fill: #000000;
-    } 
   </style>
   <path d="M666.6,129.5v69.7c0,15-9.3,25.6-22,25.6h-6.2c-13,0-22-10.6-22-25.6v-69.7h-24.5v74c0,26.7,19.2,45.9,46.1,45.9h7.1
     c26.9,0,45.9-19.2,45.9-45.9v-74H666.6z M890.1,171.8l45.4-47.8h-34.2l-39.9,43V95.7h-24.2v151.7h24.2v-44.5l11.7-12.3l39.9,56.9h30
