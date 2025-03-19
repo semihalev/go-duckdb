@@ -262,6 +262,13 @@ func (cp *ColumnVectorPool) resetVector(vector *ColumnVector) {
 		for i := range vector.blobData {
 			vector.blobData[i] = nil
 		}
+
+	case C.DUCKDB_TYPE_TIMESTAMP, C.DUCKDB_TYPE_TIMESTAMP_S,
+		C.DUCKDB_TYPE_TIMESTAMP_MS, C.DUCKDB_TYPE_TIMESTAMP_NS,
+		C.DUCKDB_TYPE_TIMESTAMP_TZ:
+		for i := range vector.timestampData {
+			vector.timestampData[i] = 0
+		}
 	}
 }
 
@@ -329,8 +336,12 @@ func createColumnVector(colType C.duckdb_type, capacity int) *ColumnVector {
 		cv.stringData = make([]string, capacity)
 	case C.DUCKDB_TYPE_BLOB:
 		cv.blobData = make([][]byte, capacity)
+	case C.DUCKDB_TYPE_TIMESTAMP, C.DUCKDB_TYPE_TIMESTAMP_S,
+		C.DUCKDB_TYPE_TIMESTAMP_MS, C.DUCKDB_TYPE_TIMESTAMP_NS,
+		C.DUCKDB_TYPE_TIMESTAMP_TZ:
+		cv.timestampData = make([]int64, capacity)
 	default:
-		// For complex types (timestamps, etc.), use a generic slice
+		// For other complex types, use a generic slice
 		cv.timeData = make([]interface{}, capacity)
 	}
 

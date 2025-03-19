@@ -395,8 +395,7 @@ func bindParameters(stmt *C.duckdb_prepared_statement, args []driver.NamedValue)
 				}
 			} else {
 				// Safely get pointer to the first byte in the slice
-				var dataPtr unsafe.Pointer
-				dataPtr = unsafe.Pointer(&v[0])
+				dataPtr := unsafe.Pointer(&v[0])
 
 				if err := C.duckdb_bind_blob(*stmt, idx, dataPtr, C.idx_t(len(v))); err == C.DuckDBError {
 					return fmt.Errorf("failed to bind blob parameter at index %d", i)

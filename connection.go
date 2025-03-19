@@ -157,7 +157,7 @@ func (c *Connection) PrepareContext(ctx context.Context, query string) (driver.S
 }
 
 // ExecContext executes a query without returning any rows.
-func (c *Connection) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+func (c *Connection) ExecContext(ctx context.Context, query string, args []driver.Value) (driver.Result, error) {
 	if atomic.LoadInt32(&c.closed) != 0 {
 		return nil, driver.ErrBadConn
 	}
@@ -177,7 +177,7 @@ func (c *Connection) ExecContext(ctx context.Context, query string, args []drive
 }
 
 // QueryContext executes a query with the provided context.
-func (c *Connection) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+func (c *Connection) QueryContext(ctx context.Context, query string, args []driver.Value) (driver.Rows, error) {
 	if atomic.LoadInt32(&c.closed) != 0 {
 		return nil, driver.ErrBadConn
 	}
@@ -218,12 +218,12 @@ func (c *Connection) Begin() (driver.Tx, error) {
 
 // Exec implements the driver.Execer interface
 func (c *Connection) Exec(query string, args []driver.Value) (driver.Result, error) {
-	return c.ExecContext(context.Background(), query, valuesToNamedValues(args))
+	return c.ExecContext(context.Background(), query, args)
 }
 
 // Query implements the driver.Queryer interface
 func (c *Connection) Query(query string, args []driver.Value) (driver.Rows, error) {
-	return c.QueryContext(context.Background(), query, valuesToNamedValues(args))
+	return c.QueryContext(context.Background(), query, args)
 }
 
 // Prepare prepares a statement for execution.
@@ -239,18 +239,6 @@ func (c *Connection) CheckNamedValue(nv *driver.NamedValue) error {
 	default:
 		return fmt.Errorf("unsupported parameter type: %T", nv.Value)
 	}
-}
-
-// Helper function to convert driver.Value slice to driver.NamedValue slice
-func valuesToNamedValues(args []driver.Value) []driver.NamedValue {
-	namedArgs := make([]driver.NamedValue, len(args))
-	for i, arg := range args {
-		namedArgs[i] = driver.NamedValue{
-			Ordinal: i + 1,
-			Value:   arg,
-		}
-	}
-	return namedArgs
 }
 
 //------------------------------------------------------------------------------

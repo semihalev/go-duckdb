@@ -134,18 +134,18 @@ func TestEmptyBlobBindingWithParameters(t *testing.T) {
 
 	// Test binding an empty BLOB
 	emptyBlob := make([]byte, 0)
-	_, err = stmt.ExecContext(ctx, []driver.NamedValue{
-		{Ordinal: 1, Value: 1},
-		{Ordinal: 2, Value: emptyBlob},
+	_, err = stmt.ExecContext(ctx, []driver.Value{
+		1,
+		emptyBlob,
 	})
 	if err != nil {
 		t.Fatalf("Failed to bind empty BLOB: %v", err)
 	}
 
 	// Test binding NULL
-	_, err = stmt.ExecContext(ctx, []driver.NamedValue{
-		{Ordinal: 1, Value: 2},
-		{Ordinal: 2, Value: nil},
+	_, err = stmt.ExecContext(ctx, []driver.Value{
+		2,
+		nil,
 	})
 	if err != nil {
 		t.Fatalf("Failed to bind NULL BLOB: %v", err)
@@ -153,9 +153,9 @@ func TestEmptyBlobBindingWithParameters(t *testing.T) {
 
 	// Test binding non-empty BLOB
 	nonEmptyBlob := []byte{1, 2, 3, 4, 5}
-	_, err = stmt.ExecContext(ctx, []driver.NamedValue{
-		{Ordinal: 1, Value: 3},
-		{Ordinal: 2, Value: nonEmptyBlob},
+	_, err = stmt.ExecContext(ctx, []driver.Value{
+		3,
+		nonEmptyBlob,
 	})
 	if err != nil {
 		t.Fatalf("Failed to bind non-empty BLOB: %v", err)

@@ -21,7 +21,7 @@ import (
 
 // FastExec executes a query without returning any rows.
 // This is the high-performance implementation that uses the C adapter.
-func (conn *Connection) FastExec(query string, args ...interface{}) (driver.Result, error) {
+func (conn *Connection) FastExec(query string, args ...driver.Value) (driver.Result, error) {
 	if len(args) == 0 {
 		// Direct query execution for simple statements
 		return conn.fastExecDirect(query)
@@ -65,7 +65,7 @@ func (conn *Connection) fastExecDirect(query string) (driver.Result, error) {
 }
 
 // FastExecContext executes a query without returning any rows, with context and named parameters.
-func (conn *Connection) FastExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+func (conn *Connection) FastExecContext(ctx context.Context, query string, args []driver.Value) (driver.Result, error) {
 	// First check context cancellation
 	select {
 	case <-ctx.Done():
@@ -94,18 +94,12 @@ func (conn *Connection) FastExecContext(ctx context.Context, query string, args 
 		// Continue if still valid
 	}
 
-	// Convert named parameters to positional for our implementation
-	params := make([]interface{}, len(args))
-	for i, arg := range args {
-		params[i] = arg.Value
-	}
-
 	// Execute with parameters and respect context cancellation
 	return stmt.ExecContext(ctx, args)
 }
 
 // FastQueryContext executes a query that returns rows, with context and named parameters.
-func (conn *Connection) FastQueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+func (conn *Connection) FastQueryContext(ctx context.Context, query string, args []driver.Value) (driver.Rows, error) {
 	// First check context cancellation
 	select {
 	case <-ctx.Done():
@@ -215,17 +209,11 @@ func (stmt *FastStmt) Close() error {
 
 // Exec implements the driver.Stmt interface.
 func (stmt *FastStmt) Exec(args []driver.Value) (driver.Result, error) {
-	// Convert driver.Value to interface{}
-	params := make([]interface{}, len(args))
-	for i, arg := range args {
-		params[i] = arg
-	}
-
-	return stmt.ExecuteWithResult(params...)
+	return stmt.ExecuteWithResult(args...)
 }
 
 // ExecContext implements the driver.StmtExecContext interface.
-func (stmt *FastStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+func (stmt *FastStmt) ExecContext(ctx context.Context, args []driver.Value) (driver.Result, error) {
 	// Check if statement is closed
 	if stmt.stmt == nil {
 		return nil, fmt.Errorf("statement is closed")
@@ -239,14 +227,8 @@ func (stmt *FastStmt) ExecContext(ctx context.Context, args []driver.NamedValue)
 		// Proceed if context still valid
 	}
 
-	// Convert driver.NamedValue to interface{}
-	params := make([]interface{}, len(args))
-	for i, arg := range args {
-		params[i] = arg.Value
-	}
-
 	// Bind parameters
-	if err := stmt.bindParameters(params); err != nil {
+	if err := stmt.bindParameters(args); err != nil {
 		return nil, err
 	}
 
@@ -280,17 +262,11 @@ func (stmt *FastStmt) ExecContext(ctx context.Context, args []driver.NamedValue)
 
 // Query implements the driver.Stmt interface.
 func (stmt *FastStmt) Query(args []driver.Value) (driver.Rows, error) {
-	// Convert driver.Value to interface{}
-	params := make([]interface{}, len(args))
-	for i, arg := range args {
-		params[i] = arg
-	}
-
-	return stmt.ExecuteFast(params...)
+	return stmt.ExecuteFast(args...)
 }
 
 // QueryContext implements the driver.StmtQueryContext interface.
-func (stmt *FastStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+func (stmt *FastStmt) QueryContext(ctx context.Context, args []driver.Value) (driver.Rows, error) {
 	// Check if statement is closed
 	if stmt.stmt == nil {
 		return nil, fmt.Errorf("statement is closed")
@@ -304,14 +280,8 @@ func (stmt *FastStmt) QueryContext(ctx context.Context, args []driver.NamedValue
 		// Proceed if context still valid
 	}
 
-	// Convert driver.NamedValue to interface{}
-	params := make([]interface{}, len(args))
-	for i, arg := range args {
-		params[i] = arg.Value
-	}
-
 	// Bind parameters
-	if err := stmt.bindParameters(params); err != nil {
+	if err := stmt.bindParameters(args); err != nil {
 		return nil, err
 	}
 
@@ -340,7 +310,7 @@ func (stmt *FastStmt) QueryContext(ctx context.Context, args []driver.NamedValue
 }
 
 // ExecuteFast executes the prepared statement with the fast driver.
-func (stmt *FastStmt) ExecuteFast(args ...interface{}) (driver.Rows, error) {
+func (stmt *FastStmt) ExecuteFast(args ...driver.Value) (driver.Rows, error) {
 	if stmt.stmt == nil {
 		return nil, fmt.Errorf("statement is closed")
 	}
@@ -367,33 +337,29 @@ func (stmt *FastStmt) ExecuteFast(args ...interface{}) (driver.Rows, error) {
 }
 
 // ExecuteWithResult executes the prepared statement and returns a Result with affected rows.
-func (stmt *FastStmt) ExecuteWithResult(args ...interface{}) (driver.Result, error) {
+func (stmt *FastStmt) ExecuteWithResult(args ...driver.Value) (driver.Result, error) {
 	if stmt.stmt == nil {
 		return nil, fmt.Errorf("statement is closed")
 	}
 
+	namedArgs := make([]driver.NamedValue, len(args))
+	for i, arg := range args {
+		namedArgs[i] = driver.NamedValue{
+			Ordinal: i + 1,
+			Value:   arg,
+		}
+	}
+
 	// If statement is backed by the standard driver, delegate to it (for stubs)
 	if stmt.standardStmt != nil {
-		driverArgs := make([]driver.Value, len(args))
-		for i, arg := range args {
-			driverArgs[i] = arg
-		}
-
 		// Check if standardStmt implements StmtExecContext
 		if execer, ok := stmt.standardStmt.(driver.StmtExecContext); ok {
 			// Convert to NamedValue
-			namedArgs := make([]driver.NamedValue, len(driverArgs))
-			for i, arg := range driverArgs {
-				namedArgs[i] = driver.NamedValue{
-					Ordinal: i + 1,
-					Value:   arg,
-				}
-			}
 			return execer.ExecContext(context.Background(), namedArgs)
 		}
 
 		// Fall back to Exec if StmtExecContext is not implemented
-		return stmt.standardStmt.Exec(driverArgs)
+		return stmt.standardStmt.Exec(args)
 	}
 
 	// Bind parameters
@@ -422,7 +388,7 @@ func (stmt *FastStmt) ExecuteWithResult(args ...interface{}) (driver.Result, err
 }
 
 // bindParameters binds parameters to the prepared statement.
-func (stmt *FastStmt) bindParameters(args []interface{}) error {
+func (stmt *FastStmt) bindParameters(args []driver.Value) error {
 	if len(args) != stmt.paramCount {
 		return fmt.Errorf("expected %d parameters, got %d", stmt.paramCount, len(args))
 	}
@@ -527,6 +493,14 @@ func (stmt *FastStmt) bindParameters(args []interface{}) error {
 				if err := C.duckdb_bind_blob(*stmt.stmt, idx, unsafe.Pointer(&v[0]), C.idx_t(len(v))); err == C.DuckDBError {
 					return fmt.Errorf("failed to bind blob parameter at index %d", i+1)
 				}
+			}
+
+		case time.Time:
+			// Convert to DuckDB timestamp (microseconds since 1970-01-01)
+			micros := v.Unix()*1000000 + int64(v.Nanosecond())/1000
+			ts := C.duckdb_timestamp{micros: C.int64_t(micros)}
+			if err := C.duckdb_bind_timestamp(*stmt.stmt, idx, ts); err == C.DuckDBError {
+				return fmt.Errorf("failed to bind timestamp parameter at index %d", i+1)
 			}
 
 		default:
@@ -820,7 +794,7 @@ func (r *FastRows) Next(dest []driver.Value) error {
 
 // DirectQuery executes a query and returns the full result set as nested slices.
 // This is primarily used for direct access patterns that don't use the sql.Rows interface.
-func (conn *Connection) DirectQuery(query string, args ...interface{}) ([][]interface{}, []string, error) {
+func (conn *Connection) DirectQuery(query string, args ...driver.Value) ([][]driver.Value, []string, error) {
 	var rows driver.Rows
 	var err error
 
@@ -847,7 +821,7 @@ func (conn *Connection) DirectQuery(query string, args ...interface{}) ([][]inte
 	columns := rows.Columns()
 
 	// Prepare result set
-	var result [][]interface{}
+	var result [][]driver.Value
 
 	// Iterate through rows
 	for {
@@ -857,13 +831,7 @@ func (conn *Connection) DirectQuery(query string, args ...interface{}) ([][]inte
 			break
 		}
 
-		// Convert to interface{} for return
-		row := make([]interface{}, len(values))
-		for i, v := range values {
-			row[i] = v
-		}
-
-		result = append(result, row)
+		result = append(result, values)
 	}
 
 	return result, columns, nil
@@ -898,17 +866,11 @@ func (w *FastStmtWrapper) Exec(args []driver.Value) (driver.Result, error) {
 		return nil, fmt.Errorf("statement is closed")
 	}
 
-	// Convert to []interface{}
-	params := make([]interface{}, len(args))
-	for i, arg := range args {
-		params[i] = arg
-	}
-
-	return w.stmt.ExecuteWithResult(params...)
+	return w.stmt.ExecuteWithResult(args...)
 }
 
 // ExecContext executes a query with context that doesn't return rows.
-func (w *FastStmtWrapper) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+func (w *FastStmtWrapper) ExecContext(ctx context.Context, args []driver.Value) (driver.Result, error) {
 	if w.stmt == nil {
 		return nil, fmt.Errorf("statement is closed")
 	}
@@ -922,17 +884,11 @@ func (w *FastStmtWrapper) Query(args []driver.Value) (driver.Rows, error) {
 		return nil, fmt.Errorf("statement is closed")
 	}
 
-	// Convert to []interface{}
-	params := make([]interface{}, len(args))
-	for i, arg := range args {
-		params[i] = arg
-	}
-
-	return w.stmt.ExecuteFast(params...)
+	return w.stmt.ExecuteFast(args...)
 }
 
 // QueryContext executes a query with context that may return rows.
-func (w *FastStmtWrapper) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+func (w *FastStmtWrapper) QueryContext(ctx context.Context, args []driver.Value) (driver.Rows, error) {
 	if w.stmt == nil {
 		return nil, fmt.Errorf("statement is closed")
 	}

@@ -413,7 +413,7 @@ func (pe *ParallelExtractor) extractChunk(colIdx int, startRow, endRow int) (int
 	default:
 		// Get type name for better error reporting
 		typeName := "unknown"
-		if colType >= 0 && colType <= 30 {
+		if colType > 0 && colType <= 30 {
 			// Map some common types to strings for better error messages
 			// Match the actual DUCKDB_TYPE_* enum values from duckdb.h
 			typeNames := []string{

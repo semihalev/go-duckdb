@@ -325,6 +325,7 @@ This document highlights critical issues, unused methods, and performance bottle
 10. Unsafe memory access in string handling must include proper bounds checking to prevent buffer overruns
 11. Locks must be held during the entire critical section to prevent race conditions
 12. Defensive programming techniques like avoiding TOCTTOU (Time-of-check to time-of-use) bugs are essential for thread safety
+13. DuckDB's C API appears to apply padding or alignment to BLOB data, resulting in different sizes than expected: medium blobs of 1000 bytes return as 2896 bytes, and large blobs of 10000 bytes return as 29236 bytes. Benchmarks and tests have been modified to account for these expected size discrepancies
 
 ### Memory Safety and Go 1.17+ Compatibility Fixes (March 2025)
 

@@ -25,6 +25,72 @@ typedef struct {
     int32_t nullable;
 } column_meta_t;
 
+// Vector extraction functions for efficient batch processing
+// These functions extract an entire column of values with a single call
+// to minimize CGO boundary crossings
+
+// Extract bool values and nulls from a result column
+void extract_vector_bool(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                        idx_t batch_size, bool *values, bool *nulls);
+
+// Extract int8 values and nulls from a result column
+void extract_vector_int8(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                        idx_t batch_size, int8_t *values, bool *nulls);
+
+// Extract int16 values and nulls from a result column
+void extract_vector_int16(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                         idx_t batch_size, int16_t *values, bool *nulls);
+
+// Extract int32 values and nulls from a result column
+void extract_vector_int32(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                         idx_t batch_size, int32_t *values, bool *nulls);
+
+// Extract int64 values and nulls from a result column
+void extract_vector_int64(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                         idx_t batch_size, int64_t *values, bool *nulls);
+
+// Extract uint8 values and nulls from a result column
+void extract_vector_uint8(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                         idx_t batch_size, uint8_t *values, bool *nulls);
+
+// Extract uint16 values and nulls from a result column
+void extract_vector_uint16(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                          idx_t batch_size, uint16_t *values, bool *nulls);
+
+// Extract uint32 values and nulls from a result column
+void extract_vector_uint32(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                          idx_t batch_size, uint32_t *values, bool *nulls);
+
+// Extract uint64 values and nulls from a result column
+void extract_vector_uint64(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                          idx_t batch_size, uint64_t *values, bool *nulls);
+
+// Extract float32 values and nulls from a result column
+void extract_vector_float32(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                           idx_t batch_size, float *values, bool *nulls);
+
+// Extract float64 values and nulls from a result column
+void extract_vector_float64(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                           idx_t batch_size, double *values, bool *nulls);
+
+// Extract string values and nulls from a result column
+// Returns 1 on success, 0 on failure
+int extract_vector_string(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                         idx_t batch_size, char **values, idx_t *lengths, bool *nulls);
+
+// Extract blob values and nulls from a result column
+// Returns 1 on success, 0 on failure
+int extract_vector_blob(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                       idx_t batch_size, char **values, idx_t *lengths, bool *nulls);
+
+// Extract timestamp values and nulls from a result column
+void extract_vector_timestamp(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                             idx_t batch_size, int64_t *values, bool *nulls);
+
+// Extract date values and nulls from a result column
+void extract_vector_date(duckdb_result *result, idx_t col_idx, idx_t offset, 
+                        idx_t batch_size, int32_t *values, bool *nulls);
+
 // Temporal data structure for date/timestamp handling
 typedef struct {
     // Date data (seconds since epoch for each date value)

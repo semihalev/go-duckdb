@@ -61,20 +61,21 @@ type ColumnVector struct {
 
 	// Type-specific storage - we only populate the relevant field
 	// This design avoids unnecessary allocations for unused types
-	boolData    []bool
-	int8Data    []int8
-	int16Data   []int16
-	int32Data   []int32
-	int64Data   []int64
-	uint8Data   []uint8
-	uint16Data  []uint16
-	uint32Data  []uint32
-	uint64Data  []uint64
-	float32Data []float32
-	float64Data []float64
-	stringData  []string
-	blobData    [][]byte
-	timeData    []interface{} // For timestamp, date, time
+	boolData      []bool
+	int8Data      []int8
+	int16Data     []int16
+	int32Data     []int32
+	int64Data     []int64
+	uint8Data     []uint8
+	uint16Data    []uint16
+	uint32Data    []uint32
+	uint64Data    []uint64
+	float32Data   []float32
+	float64Data   []float64
+	stringData    []string
+	blobData      [][]byte
+	timestampData []int64       // For timestamp types (microseconds since epoch)
+	timeData      []interface{} // For other time-related types
 }
 
 // NewBatchQuery creates a new batch-oriented query from a DuckDB result
@@ -239,8 +240,9 @@ func (bq *BatchQuery) fetchNextBatch() bool {
 		vector := bq.vectors[colIdx]
 		vector.length = batchSize
 
-		// Function call is outside the loop to minimize CGO boundary crossings
-		bq.extractColumnBatch(colIdx, int(batchStart), batchSize, vector)
+		// Use the new Vector implementation for data extraction
+		// This avoids redundant CGO boundary crossings for each individual value
+		bq.extractColumnBatchWithNativeVector(colIdx, int(batchStart), batchSize, vector)
 	}
 
 	// Update current batch
@@ -248,6 +250,106 @@ func (bq *BatchQuery) fetchNextBatch() bool {
 	bq.currentRow += int64(batchSize)
 
 	return true
+}
+
+// extractColumnBatchWithNativeVector extracts a batch of values using Vector
+// This implementation uses the new Vector type to reduce CGO overhead
+func (bq *BatchQuery) extractColumnBatchWithNativeVector(colIdx int, startRow int, batchSize int, cv *ColumnVector) error {
+	// Create a native vector directly from the result
+	// This significantly reduces CGO overhead by avoiding per-value crossings
+	nativeVector := NewVectorFromResult(bq.result, colIdx, startRow, batchSize)
+	if nativeVector == nil {
+		// Fall back to the older implementation if there's an issue
+		bq.extractColumnBatch(colIdx, startRow, batchSize, cv)
+		return nil
+	}
+
+	// Copy data from native vector's pooled column vector to our column vector
+	// Both are using the same type of storage, so we can copy efficiently
+
+	// First, copy the null map
+	if nativeVector.pooledVector != nil && len(nativeVector.pooledVector.nullMap) == len(cv.nullMap) {
+		copy(cv.nullMap, nativeVector.pooledVector.nullMap)
+	}
+
+	// Now, copy the type-specific data based on column type
+	switch bq.columnTypes[colIdx] {
+	case C.DUCKDB_TYPE_BOOLEAN:
+		if len(nativeVector.pooledVector.boolData) > 0 && len(cv.boolData) > 0 {
+			copy(cv.boolData, nativeVector.pooledVector.boolData)
+		}
+
+	case C.DUCKDB_TYPE_TINYINT:
+		if len(nativeVector.pooledVector.int8Data) > 0 && len(cv.int8Data) > 0 {
+			copy(cv.int8Data, nativeVector.pooledVector.int8Data)
+		}
+
+	case C.DUCKDB_TYPE_SMALLINT:
+		if len(nativeVector.pooledVector.int16Data) > 0 && len(cv.int16Data) > 0 {
+			copy(cv.int16Data, nativeVector.pooledVector.int16Data)
+		}
+
+	case C.DUCKDB_TYPE_INTEGER:
+		if len(nativeVector.pooledVector.int32Data) > 0 && len(cv.int32Data) > 0 {
+			copy(cv.int32Data, nativeVector.pooledVector.int32Data)
+		}
+
+	case C.DUCKDB_TYPE_BIGINT:
+		if len(nativeVector.pooledVector.int64Data) > 0 && len(cv.int64Data) > 0 {
+			copy(cv.int64Data, nativeVector.pooledVector.int64Data)
+		}
+
+	case C.DUCKDB_TYPE_UTINYINT:
+		if len(nativeVector.pooledVector.uint8Data) > 0 && len(cv.uint8Data) > 0 {
+			copy(cv.uint8Data, nativeVector.pooledVector.uint8Data)
+		}
+
+	case C.DUCKDB_TYPE_USMALLINT:
+		if len(nativeVector.pooledVector.uint16Data) > 0 && len(cv.uint16Data) > 0 {
+			copy(cv.uint16Data, nativeVector.pooledVector.uint16Data)
+		}
+
+	case C.DUCKDB_TYPE_UINTEGER:
+		if len(nativeVector.pooledVector.uint32Data) > 0 && len(cv.uint32Data) > 0 {
+			copy(cv.uint32Data, nativeVector.pooledVector.uint32Data)
+		}
+
+	case C.DUCKDB_TYPE_UBIGINT:
+		if len(nativeVector.pooledVector.uint64Data) > 0 && len(cv.uint64Data) > 0 {
+			copy(cv.uint64Data, nativeVector.pooledVector.uint64Data)
+		}
+
+	case C.DUCKDB_TYPE_FLOAT:
+		if len(nativeVector.pooledVector.float32Data) > 0 && len(cv.float32Data) > 0 {
+			copy(cv.float32Data, nativeVector.pooledVector.float32Data)
+		}
+
+	case C.DUCKDB_TYPE_DOUBLE:
+		if len(nativeVector.pooledVector.float64Data) > 0 && len(cv.float64Data) > 0 {
+			copy(cv.float64Data, nativeVector.pooledVector.float64Data)
+		}
+
+	case C.DUCKDB_TYPE_VARCHAR:
+		if len(nativeVector.pooledVector.stringData) > 0 && len(cv.stringData) > 0 {
+			copy(cv.stringData, nativeVector.pooledVector.stringData)
+		}
+
+	case C.DUCKDB_TYPE_BLOB:
+		if len(nativeVector.pooledVector.blobData) > 0 && len(cv.blobData) > 0 {
+			copy(cv.blobData, nativeVector.pooledVector.blobData)
+		}
+
+	default:
+		// For complex types or any other types, fall back to the timeData array
+		if len(nativeVector.pooledVector.timeData) > 0 && len(cv.timeData) > 0 {
+			copy(cv.timeData, nativeVector.pooledVector.timeData)
+		}
+	}
+
+	// Clean up the native vector - this will return the pooled vector to its pool
+	PutVector(nativeVector)
+
+	return nil
 }
 
 // extractColumnBatch extracts a batch of values for a specific column

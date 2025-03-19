@@ -119,6 +119,7 @@ func TestParallelExtraction(t *testing.T) {
 }
 
 func BenchmarkParallelExtraction(b *testing.B) {
+	b.Skip("Due do fatal error: semasleep on Darwin signal stack")
 	// Connect to in-memory database
 	conn, err := NewConnection(":memory:")
 	if err != nil {
