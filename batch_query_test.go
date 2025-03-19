@@ -447,22 +447,25 @@ func BenchmarkBatchQuery(b *testing.B) {
 		batchSize := 100
 
 		for i := 0; i < b.N; i++ {
-			// Create multiple parameter sets
-			parameterSets := make([][]interface{}, batchSize)
+			// Create driver.Value slice for the batch
+			driverParams := make([]driver.Value, batchSize)
 
 			// Populate parameter sets
 			for j := 0; j < batchSize; j++ {
 				paramID := (i * batchSize) + j
-				parameterSets[j] = []interface{}{
+				// Each parameter set is an individual []interface{} that represents one row
+				paramSet := []interface{}{
 					paramID,
 					fmt.Sprintf("batch-%d", paramID),
 					float64(paramID) * 2.5,
 					paramID%3 == 0,
 				}
+				// Store the parameter set as a driver.Value
+				driverParams[j] = paramSet
 			}
 
 			// Execute with BatchExec
-			result, err := conn.BatchExec("INSERT INTO bench_test VALUES (?, ?, ?, ?)", parameterSets)
+			result, err := conn.BatchExec("INSERT INTO bench_test VALUES (?, ?, ?, ?)", driverParams)
 			if err != nil {
 				b.Fatalf("Failed to execute batch: %v", err)
 			}
@@ -504,18 +507,25 @@ func TestBatchExec(t *testing.T) {
 
 	// Create multiple parameter sets for the batch operation
 	batchSize := 10
-	parameterSets := make([][]interface{}, batchSize)
-
+	
+	// We need to create a slice with a structure that matches what BatchExec expects
+	// Each element in the batch should be a driver.Value containing a []interface{}
+	// This structure allows BatchExec to process multiple sets of parameters at once
+	driverParams := make([]driver.Value, batchSize)
+	
 	// Populate parameter sets with minimal types
 	for i := 0; i < batchSize; i++ {
-		parameterSets[i] = []interface{}{
+		// Each parameter set is an individual []interface{} that represents one row
+		paramSet := []interface{}{
 			i,
 			fmt.Sprintf("name-%d", i),
 		}
+		// Store the parameter set as a driver.Value
+		driverParams[i] = paramSet
 	}
-
+	
 	// Execute with BatchExec
-	result, err := conn.BatchExec("INSERT INTO batch_exec_test VALUES (?, ?)", parameterSets)
+	result, err := conn.BatchExec("INSERT INTO batch_exec_test VALUES (?, ?)", driverParams)
 	if err != nil {
 		t.Fatalf("Failed to execute batch: %v", err)
 	}

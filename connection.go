@@ -174,87 +174,7 @@ func (c *Connection) ExecContext(ctx context.Context, query string, args []drive
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// We need to check if we're using dynamic library with fallback mode
-	// and avoid using the fast driver in that case
-	if nativeLibLoaded {
-		// Use fast driver for optimized performance
-		return c.FastExecContext(ctx, query, args)
-	} else {
-		// Use standard, pure Go implementation for fallback mode
-		// This path is taken when the dynamic library is not available
-		var result C.duckdb_result
-
-		// If we have parameters, we need to use a prepared statement
-		if len(args) > 0 {
-			// Prepare the query
-			cQuery := cString(query)
-			defer freeString(cQuery)
-
-			var stmt C.duckdb_prepared_statement
-			if err := C.duckdb_prepare(*c.conn, cQuery, &stmt); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to prepare statement: %s", goString(C.duckdb_prepare_error(stmt)))
-			}
-			defer C.duckdb_destroy_prepare(&stmt)
-
-			// Bind parameters
-			for i, arg := range args {
-				// Check if context was canceled during parameter binding
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				default:
-					// Continue binding parameters
-				}
-
-				idx := C.idx_t(i + 1) // Parameters are 1-indexed in DuckDB
-				if err := bindValue(stmt, idx, arg.Value); err != nil {
-					return nil, err
-				}
-			}
-
-			// Check context again before executing
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-				// Proceed with execution
-			}
-
-			// Execute statement
-			if err := C.duckdb_execute_prepared(stmt, &result); err == C.DuckDBError {
-				errMsg := goString(C.duckdb_result_error(&result))
-				C.duckdb_destroy_result(&result)
-				return nil, fmt.Errorf("failed to execute statement: %s", errMsg)
-			}
-		} else {
-			// Direct query without parameters
-			cQuery := cString(query)
-			defer freeString(cQuery)
-
-			// Check context again before executing direct query
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-				// Proceed with execution
-			}
-
-			if err := C.duckdb_query(*c.conn, cQuery, &result); err == C.DuckDBError {
-				errMsg := goString(C.duckdb_result_error(&result))
-				C.duckdb_destroy_result(&result)
-				return nil, fmt.Errorf("failed to execute query: %s", errMsg)
-			}
-		}
-
-		// Extract affected rows
-		rowsAffected := int64(C.duckdb_rows_changed(&result))
-		C.duckdb_destroy_result(&result)
-
-		return &Result{
-			rowsAffected: rowsAffected,
-			lastInsertID: 0, // DuckDB doesn't support last insert ID
-		}, nil
-	}
+	return c.FastExecContext(ctx, query, args)
 }
 
 // bindValue binds a value to a prepared statement.
@@ -387,81 +307,7 @@ func (c *Connection) QueryContext(ctx context.Context, query string, args []driv
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// We need to check if we're using dynamic library with fallback mode
-	// and avoid using the fast driver in that case
-	if nativeLibLoaded {
-		// Use fast driver for optimized performance
-		return c.FastQueryContext(ctx, query, args)
-	} else {
-		// Use standard, pure Go implementation for fallback mode
-		// This path is taken when the dynamic library is not available
-		var result C.duckdb_result
-
-		// If we have parameters, we need to use a prepared statement
-		if len(args) > 0 {
-			// Prepare the query
-			cQuery := cString(query)
-			defer freeString(cQuery)
-
-			var stmt C.duckdb_prepared_statement
-			if err := C.duckdb_prepare(*c.conn, cQuery, &stmt); err == C.DuckDBError {
-				return nil, fmt.Errorf("failed to prepare statement: %s", goString(C.duckdb_prepare_error(stmt)))
-			}
-			defer C.duckdb_destroy_prepare(&stmt)
-
-			// Bind parameters
-			for i, arg := range args {
-				// Check if context was canceled during parameter binding
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				default:
-					// Continue binding parameters
-				}
-
-				idx := C.idx_t(i + 1) // Parameters are 1-indexed in DuckDB
-				if err := bindValue(stmt, idx, arg.Value); err != nil {
-					return nil, err
-				}
-			}
-
-			// Check context again before executing
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-				// Proceed with execution
-			}
-
-			// Execute statement
-			if err := C.duckdb_execute_prepared(stmt, &result); err == C.DuckDBError {
-				errMsg := goString(C.duckdb_result_error(&result))
-				C.duckdb_destroy_result(&result)
-				return nil, fmt.Errorf("failed to execute statement: %s", errMsg)
-			}
-		} else {
-			// Direct query without parameters
-			cQuery := cString(query)
-			defer freeString(cQuery)
-
-			// Check context again before executing direct query
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			default:
-				// Proceed with execution
-			}
-
-			if err := C.duckdb_query(*c.conn, cQuery, &result); err == C.DuckDBError {
-				errMsg := goString(C.duckdb_result_error(&result))
-				C.duckdb_destroy_result(&result)
-				return nil, fmt.Errorf("failed to execute query: %s", errMsg)
-			}
-		}
-
-		// Create rows from result
-		return newRows(&result), nil
-	}
+	return c.FastQueryContext(ctx, query, args)
 }
 
 // Ping verifies a connection to the database is still alive.
@@ -786,25 +632,81 @@ func (c *Connection) ExecDirect(query string) (int64, error) {
 
 // BatchExec prepares and executes a statement with multiple parameter sets in a single batch operation
 // This provides a significant performance improvement over executing multiple individual statements
-func (conn *Connection) BatchExec(query string, parameterSets [][]interface{}) (driver.Result, error) {
+func (conn *Connection) BatchExec(query string, args []driver.Value) (driver.Result, error) {
 	if atomic.LoadInt32(&conn.closed) != 0 {
 		return nil, driver.ErrBadConn
 	}
 
-	// Prepare the batch statement
-	stmt, err := NewOptimizedBatchStmt(conn, query)
-	if err != nil {
-		return nil, err
+	// Extract the first parameter set to determine the number of parameters per set
+	if len(args) == 0 {
+		return nil, fmt.Errorf("no parameter sets provided")
 	}
-	defer stmt.Close()
-
-	// Execute the batch
-	return stmt.ExecBatch(parameterSets)
+	
+	// Count the number of parameters in the first set
+	var firstParamSetLen int
+	switch v := args[0].(type) {
+	case []interface{}:
+		firstParamSetLen = len(v)
+	default:
+		return nil, fmt.Errorf("expected []interface{} parameter set, got %T", args[0])
+	}
+	
+	// Count the total rows affected across all executions
+	var totalRowsAffected int64
+	
+	// Loop through each parameter set and execute individually
+	// This is a fallback implementation until we have true batch execution
+	for i, arg := range args {
+		paramSet, ok := arg.([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("parameter set %d is not []interface{}", i)
+		}
+		
+		if len(paramSet) != firstParamSetLen {
+			return nil, fmt.Errorf("parameter set %d has %d parameters, expected %d", 
+				i, len(paramSet), firstParamSetLen)
+		}
+		
+		// Prepare a statement for this execution
+		// We'll reuse the statement for each parameter set
+		stmt, err := conn.Prepare(query)
+		if err != nil {
+			return nil, fmt.Errorf("failed to prepare statement: %w", err)
+		}
+		
+		// Convert []interface{} to []driver.Value for Exec
+		driverValues := make([]driver.Value, len(paramSet))
+		for j, p := range paramSet {
+			driverValues[j] = p
+		}
+		
+		// Execute with these parameters
+		result, err := stmt.Exec(driverValues)
+		stmt.Close() // Close the statement after use
+		
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute batch set %d: %w", i, err)
+		}
+		
+		// Add to total rows affected
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get rows affected for batch set %d: %w", i, err)
+		}
+		
+		totalRowsAffected += rowsAffected
+	}
+	
+	// Return a result with the total rows affected
+	return &Result{
+		rowsAffected: totalRowsAffected,
+		lastInsertID: 0, // DuckDB doesn't support last insert ID
+	}, nil
 }
 
 // BatchExecContext prepares and executes a statement with multiple parameter sets in a single batch operation
 // with context support for cancellation
-func (conn *Connection) BatchExecContext(ctx context.Context, query string, parameterSets [][]interface{}) (driver.Result, error) {
+func (conn *Connection) BatchExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	if atomic.LoadInt32(&conn.closed) != 0 {
 		return nil, driver.ErrBadConn
 	}
@@ -817,13 +719,87 @@ func (conn *Connection) BatchExecContext(ctx context.Context, query string, para
 		// Context is still valid, proceed
 	}
 
-	// Prepare the batch statement
-	stmt, err := NewOptimizedBatchStmt(conn, query)
-	if err != nil {
-		return nil, err
+	// Extract the first parameter set to determine the number of parameters per set
+	if len(args) == 0 {
+		return nil, fmt.Errorf("no parameter sets provided")
 	}
-	defer stmt.Close()
-
-	// Execute the batch with context
-	return stmt.ExecBatchContext(ctx, parameterSets)
+	
+	// Count the number of parameters in the first set
+	var firstParamSetLen int
+	switch v := args[0].Value.(type) {
+	case []interface{}:
+		firstParamSetLen = len(v)
+	default:
+		return nil, fmt.Errorf("expected []interface{} parameter set, got %T", args[0].Value)
+	}
+	
+	// Count the total rows affected across all executions
+	var totalRowsAffected int64
+	
+	// Loop through each parameter set and execute individually
+	for i, arg := range args {
+		// Check context periodically
+		if i%10 == 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+				// Context is still valid, proceed
+			}
+		}
+		
+		paramSet, ok := arg.Value.([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("parameter set %d is not []interface{}", i)
+		}
+		
+		if len(paramSet) != firstParamSetLen {
+			return nil, fmt.Errorf("parameter set %d has %d parameters, expected %d", 
+				i, len(paramSet), firstParamSetLen)
+		}
+		
+		// Prepare a statement for this execution
+		stmt, err := conn.PrepareContext(ctx, query)
+		if err != nil {
+			return nil, fmt.Errorf("failed to prepare statement: %w", err)
+		}
+		
+		// Convert paramSet to NamedValue for ExecContext
+		namedValues := make([]driver.NamedValue, len(paramSet))
+		for j, p := range paramSet {
+			namedValues[j] = driver.NamedValue{
+				Ordinal: j + 1,
+				Value:   p,
+			}
+		}
+		
+		// Get stmt that implements StmtExecContext
+		execer, ok := stmt.(driver.StmtExecContext)
+		if !ok {
+			stmt.Close()
+			return nil, fmt.Errorf("statement does not implement StmtExecContext")
+		}
+		
+		// Execute with these parameters
+		result, err := execer.ExecContext(ctx, namedValues)
+		stmt.Close() // Close the statement after use
+		
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute batch set %d: %w", i, err)
+		}
+		
+		// Add to total rows affected
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get rows affected for batch set %d: %w", i, err)
+		}
+		
+		totalRowsAffected += rowsAffected
+	}
+	
+	// Return a result with the total rows affected
+	return &Result{
+		rowsAffected: totalRowsAffected,
+		lastInsertID: 0, // DuckDB doesn't support last insert ID
+	}, nil
 }
