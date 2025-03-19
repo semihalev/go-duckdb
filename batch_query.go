@@ -29,8 +29,8 @@ const DefaultBlockSize = 64
 
 // Error types
 var (
-	ErrNoRowsAvailable   = errors.New("no rows available in current batch")
-	ErrInvalidRowIndex   = errors.New("invalid row index")
+	ErrNoRowsAvailable = errors.New("no rows available in current batch")
+	ErrInvalidRowIndex = errors.New("invalid row index")
 )
 
 // BatchQuery represents a batch-oriented query result
@@ -59,7 +59,7 @@ type BatchQuery struct {
 
 	// Temporary buffer for conversions
 	buffer []byte
-	
+
 	// Optimization flag to use unified extraction when possible
 	useUnifiedExtraction bool
 }
@@ -69,11 +69,11 @@ type BatchQuery struct {
 func (bq *BatchQuery) FetchNextBatchOptimized() error {
 	bq.mu.Lock()
 	defer bq.mu.Unlock()
-	
+
 	if bq.closed {
 		return ErrResultClosed
 	}
-	
+
 	// Calculate how many rows to fetch
 	batchStart := bq.currentRow
 	rowsLeft := bq.rowCount - batchStart
@@ -82,13 +82,13 @@ func (bq *BatchQuery) FetchNextBatchOptimized() error {
 		bq.batchAvailable = 0
 		return io.EOF
 	}
-	
+
 	// Limit batch size to available rows
 	batchSize := int64(bq.batchSize)
 	if rowsLeft < batchSize {
 		batchSize = rowsLeft
 	}
-	
+
 	// Reset previous batch vectors if they exist
 	for i := 0; i < bq.columnCount; i++ {
 		if bq.vectors[i] != nil {
@@ -96,7 +96,7 @@ func (bq *BatchQuery) FetchNextBatchOptimized() error {
 			bq.vectors[i] = nil
 		}
 	}
-	
+
 	// Extract all columns with optimized method
 	for i := 0; i < bq.columnCount; i++ {
 		vector, err := ExtractColumnBatchTyped(bq.result, i, int(batchStart), int(batchSize))
@@ -105,13 +105,13 @@ func (bq *BatchQuery) FetchNextBatchOptimized() error {
 		}
 		bq.vectors[i] = vector
 	}
-	
+
 	// Update batch state
 	bq.currentBatch++
 	bq.currentRow += batchSize
 	bq.batchAvailable = int(batchSize)
 	bq.batchRowsRead = 0
-	
+
 	return nil
 }
 
@@ -120,19 +120,19 @@ func (bq *BatchQuery) FetchNextBatchOptimized() error {
 func (bq *BatchQuery) GetColumnVector(colIdx int) (*ColumnVector, error) {
 	bq.mu.RLock()
 	defer bq.mu.RUnlock()
-	
+
 	if bq.closed {
 		return nil, ErrResultClosed
 	}
-	
+
 	if colIdx < 0 || colIdx >= bq.columnCount {
 		return nil, ErrInvalidColumnIndex
 	}
-	
+
 	if bq.batchAvailable <= 0 {
 		return nil, ErrNoRowsAvailable
 	}
-	
+
 	// Return the pre-extracted vector
 	return bq.vectors[colIdx], nil
 }
@@ -142,21 +142,21 @@ func (bq *BatchQuery) GetColumnVector(colIdx int) (*ColumnVector, error) {
 func (bq *BatchQuery) ExtractAllColumns() ([]*ColumnVector, error) {
 	bq.mu.RLock()
 	defer bq.mu.RUnlock()
-	
+
 	if bq.closed {
 		return nil, ErrResultClosed
 	}
-	
+
 	if bq.batchAvailable <= 0 {
 		return nil, ErrNoRowsAvailable
 	}
-	
+
 	// Make a copy of the vectors to return
 	vectors := make([]*ColumnVector, bq.columnCount)
 	for i := 0; i < bq.columnCount; i++ {
 		vectors[i] = bq.vectors[i]
 	}
-	
+
 	return vectors, nil
 }
 
@@ -194,11 +194,86 @@ func (bq *BatchQuery) FetchNextBatch() error {
 	if bq.useUnifiedExtraction {
 		return bq.FetchNextBatchOptimized()
 	}
-	
+
 	// Fall back to the original implementation
 	// This is kept for backward compatibility
 	// The implementation would go here
 	return fmt.Errorf("original batch fetching not implemented, use FetchNextBatchOptimized instead")
+}
+
+// GetRawValue returns the raw typed value from the current batch without any conversions
+// This is more efficient than GetValue for timestamp and date types as it avoids
+// unnecessary conversions to time.Time objects
+func (bq *BatchQuery) GetRawValue(colIdx, rowIdx int) (interface{}, bool, error) {
+	if colIdx < 0 || colIdx >= bq.columnCount {
+		return nil, false, ErrInvalidColumnIndex
+	}
+
+	if rowIdx < 0 || rowIdx >= bq.batchAvailable {
+		return nil, false, ErrInvalidRowIndex
+	}
+
+	vector := bq.vectors[colIdx]
+	if vector == nil {
+		return nil, false, fmt.Errorf("column vector not available")
+	}
+
+	// Check if value is NULL
+	if rowIdx >= len(vector.nullMap) || vector.nullMap[rowIdx] {
+		return nil, true, nil
+	}
+
+	// Return the raw value based on type
+	switch vector.columnType {
+	case C.DUCKDB_TYPE_BOOLEAN:
+		if rowIdx < len(vector.boolData) {
+			return vector.boolData[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_TINYINT:
+		if rowIdx < len(vector.int8Data) {
+			return vector.int8Data[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_SMALLINT:
+		if rowIdx < len(vector.int16Data) {
+			return vector.int16Data[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_INTEGER:
+		if rowIdx < len(vector.int32Data) {
+			return vector.int32Data[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_BIGINT:
+		if rowIdx < len(vector.int64Data) {
+			return vector.int64Data[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_FLOAT:
+		if rowIdx < len(vector.float32Data) {
+			return vector.float32Data[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_DOUBLE:
+		if rowIdx < len(vector.float64Data) {
+			return vector.float64Data[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_VARCHAR:
+		if rowIdx < len(vector.stringData) {
+			return vector.stringData[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_BLOB:
+		if rowIdx < len(vector.blobData) {
+			return vector.blobData[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_TIMESTAMP:
+		if rowIdx < len(vector.timestampData) {
+			// Return timestamp in microseconds directly
+			return vector.timestampData[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_DATE:
+		if rowIdx < len(vector.int32Data) {
+			// Return date in days since epoch directly
+			return vector.int32Data[rowIdx], false, nil
+		}
+	}
+
+	return nil, false, fmt.Errorf("unsupported column type: %d", vector.columnType)
 }
 
 // GetValue returns a typed value from the current batch
@@ -207,21 +282,21 @@ func (bq *BatchQuery) GetValue(colIdx, rowIdx int) (interface{}, bool, error) {
 	if colIdx < 0 || colIdx >= bq.columnCount {
 		return nil, false, ErrInvalidColumnIndex
 	}
-	
+
 	if rowIdx < 0 || rowIdx >= bq.batchAvailable {
 		return nil, false, ErrInvalidRowIndex
 	}
-	
+
 	vector := bq.vectors[colIdx]
 	if vector == nil {
 		return nil, false, fmt.Errorf("column vector not available")
 	}
-	
+
 	// Check if value is NULL
 	if rowIdx >= len(vector.nullMap) || vector.nullMap[rowIdx] {
 		return nil, true, nil
 	}
-	
+
 	// Return the value based on type
 	switch vector.columnType {
 	case C.DUCKDB_TYPE_BOOLEAN:
@@ -262,13 +337,52 @@ func (bq *BatchQuery) GetValue(colIdx, rowIdx int) (interface{}, bool, error) {
 		}
 	case C.DUCKDB_TYPE_TIMESTAMP:
 		if rowIdx < len(vector.timestampData) {
-			// Convert timestamp to Go time.Time
-			micros := vector.timestampData[rowIdx]
-			return time.Unix(micros/1000000, (micros%1000000)*1000), false, nil
+			// Return raw microseconds timestamp to avoid overhead
+			// Callers that need time.Time can use TimeFromTimestamp
+			return vector.timestampData[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_DATE:
+		if rowIdx < len(vector.int32Data) {
+			// Return raw days since epoch to avoid overhead
+			// Callers that need time.Time can use TimeFromDate
+			return vector.int32Data[rowIdx], false, nil
 		}
 	}
-	
+
 	return nil, false, fmt.Errorf("unsupported column type: %d", vector.columnType)
+}
+
+// GetTimeValue returns a time.Time value from a timestamp or date column
+// This is a convenience method for callers that need time.Time objects
+func (bq *BatchQuery) GetTimeValue(colIdx, rowIdx int) (time.Time, bool, error) {
+	// Get the raw value first
+	val, isNull, err := bq.GetRawValue(colIdx, rowIdx)
+	if err != nil || isNull {
+		return time.Time{}, isNull, err
+	}
+
+	// Check column type and convert to time.Time
+	switch bq.vectors[colIdx].columnType {
+	case C.DUCKDB_TYPE_TIMESTAMP:
+		// Convert microseconds since epoch to time.Time
+		micros, ok := val.(int64)
+		if !ok {
+			return time.Time{}, false, fmt.Errorf("expected int64 for timestamp, got %T", val)
+		}
+		return time.Unix(micros/1000000, (micros%1000000)*1000).UTC(), false, nil
+
+	case C.DUCKDB_TYPE_DATE:
+		// Convert days since epoch to time.Time
+		days, ok := val.(int32)
+		if !ok {
+			return time.Time{}, false, fmt.Errorf("expected int32 for date, got %T", val)
+		}
+		seconds := int64(days) * 24 * 60 * 60
+		return time.Unix(seconds, 0).UTC(), false, nil
+
+	default:
+		return time.Time{}, false, fmt.Errorf("column %d is not a timestamp or date type", colIdx)
+	}
 }
 
 // NewBatchQuery creates a new batch-oriented query from a DuckDB result
@@ -283,16 +397,16 @@ func NewBatchQuery(result *C.duckdb_result, batchSize int) *BatchQuery {
 
 	// Initialize batch query
 	bq := &BatchQuery{
-		result:              result,
-		columnCount:         columnCount,
-		rowCount:            rowCount,
-		columnNames:         make([]string, columnCount),
-		columnTypes:         make([]C.duckdb_type, columnCount),
-		batchSize:           batchSize,
-		vectors:             make([]*ColumnVector, columnCount),
-		buffer:              make([]byte, 4096), // Reusable buffer for string conversions
-		useUnifiedExtraction: true,              // Use optimized extraction by default
-		resultOwned: true,               // By default, we own the result
+		result:               result,
+		columnCount:          columnCount,
+		rowCount:             rowCount,
+		columnNames:          make([]string, columnCount),
+		columnTypes:          make([]C.duckdb_type, columnCount),
+		batchSize:            batchSize,
+		vectors:              make([]*ColumnVector, columnCount),
+		buffer:               make([]byte, 4096), // Reusable buffer for string conversions
+		useUnifiedExtraction: true,               // Use optimized extraction by default
+		resultOwned:          true,               // By default, we own the result
 	}
 
 	// Get column names and types
@@ -889,6 +1003,19 @@ func (br *BatchRows) Next(dest []driver.Value) error {
 			case C.DUCKDB_TYPE_BLOB:
 				if br.rowInBatch < len(vector.blobData) {
 					dest[i] = vector.blobData[br.rowInBatch]
+				}
+			case C.DUCKDB_TYPE_TIMESTAMP:
+				if br.rowInBatch < len(vector.timestampData) {
+					// Convert to time.Time only when needed for interface compatibility
+					micros := vector.timestampData[br.rowInBatch]
+					dest[i] = time.Unix(micros/1000000, (micros%1000000)*1000).UTC()
+				}
+			case C.DUCKDB_TYPE_DATE:
+				if br.rowInBatch < len(vector.int32Data) {
+					// Convert to time.Time only when needed for interface compatibility
+					days := vector.int32Data[br.rowInBatch]
+					seconds := int64(days) * 24 * 60 * 60
+					dest[i] = time.Unix(seconds, 0).UTC()
 				}
 			default:
 				if br.rowInBatch < len(vector.timeData) {
