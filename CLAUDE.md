@@ -17,6 +17,7 @@ Go-DuckDB is a Go driver for DuckDB, focusing on high performance with native op
 - Prefer preallocated buffers over dynamic allocations in hot paths
 
 ## Key Files
+- `duckdb_go.adapter.c` - High performance C adapter for DuckDB Go driver
 - `connection.go` - Connection represents a connection to a DuckDB database with CGO bindings
 - `duckdb.go` - Core package implementation
 - `direct_result.go` - Result handling with native optimizations

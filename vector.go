@@ -11,8 +11,6 @@ import "C"
 import (
 	"fmt"
 	"reflect"
-	"strconv"
-	"strings"
 	"sync"
 	"unsafe"
 )
@@ -35,13 +33,13 @@ func ExtractColumnBatchTyped(result *C.duckdb_result, colIdx int, startRow int, 
 	if result == nil {
 		return nil, fmt.Errorf("result is nil")
 	}
-	
+
 	// Get column type
 	colType := C.duckdb_column_type(result, C.idx_t(colIdx))
-	
+
 	// Get a pooled vector for this type to avoid allocations
 	vector := GetPooledColumnVector(colType, rowCount)
-	
+
 	// Extract data with a single CGO crossing based on type
 	switch colType {
 	case C.DUCKDB_TYPE_BOOLEAN:
@@ -51,12 +49,12 @@ func ExtractColumnBatchTyped(result *C.duckdb_result, colIdx int, startRow int, 
 		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
 			vector.nullMap = make([]bool, rowCount)
 		}
-		
+
 		// Extract data with a single CGO call
 		C.extract_vector_bool(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
 			(*C.bool)(unsafe.Pointer(&vector.boolData[0])),
 			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
-			
+
 	case C.DUCKDB_TYPE_TINYINT:
 		if vector.int8Data == nil || len(vector.int8Data) < rowCount {
 			vector.int8Data = make([]int8, rowCount)
@@ -64,11 +62,11 @@ func ExtractColumnBatchTyped(result *C.duckdb_result, colIdx int, startRow int, 
 		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
 			vector.nullMap = make([]bool, rowCount)
 		}
-		
+
 		C.extract_vector_int8(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
 			(*C.int8_t)(unsafe.Pointer(&vector.int8Data[0])),
 			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
-			
+
 	case C.DUCKDB_TYPE_SMALLINT:
 		if vector.int16Data == nil || len(vector.int16Data) < rowCount {
 			vector.int16Data = make([]int16, rowCount)
@@ -76,11 +74,11 @@ func ExtractColumnBatchTyped(result *C.duckdb_result, colIdx int, startRow int, 
 		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
 			vector.nullMap = make([]bool, rowCount)
 		}
-		
+
 		C.extract_vector_int16(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
 			(*C.int16_t)(unsafe.Pointer(&vector.int16Data[0])),
 			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
-			
+
 	case C.DUCKDB_TYPE_INTEGER:
 		if vector.int32Data == nil || len(vector.int32Data) < rowCount {
 			vector.int32Data = make([]int32, rowCount)
@@ -88,11 +86,11 @@ func ExtractColumnBatchTyped(result *C.duckdb_result, colIdx int, startRow int, 
 		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
 			vector.nullMap = make([]bool, rowCount)
 		}
-		
+
 		C.extract_vector_int32(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
 			(*C.int32_t)(unsafe.Pointer(&vector.int32Data[0])),
 			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
-			
+
 	case C.DUCKDB_TYPE_BIGINT:
 		if vector.int64Data == nil || len(vector.int64Data) < rowCount {
 			vector.int64Data = make([]int64, rowCount)
@@ -100,11 +98,11 @@ func ExtractColumnBatchTyped(result *C.duckdb_result, colIdx int, startRow int, 
 		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
 			vector.nullMap = make([]bool, rowCount)
 		}
-		
+
 		C.extract_vector_int64(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
 			(*C.int64_t)(unsafe.Pointer(&vector.int64Data[0])),
 			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
-			
+
 	case C.DUCKDB_TYPE_UTINYINT:
 		if vector.uint8Data == nil || len(vector.uint8Data) < rowCount {
 			vector.uint8Data = make([]uint8, rowCount)
@@ -112,11 +110,11 @@ func ExtractColumnBatchTyped(result *C.duckdb_result, colIdx int, startRow int, 
 		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
 			vector.nullMap = make([]bool, rowCount)
 		}
-		
+
 		C.extract_vector_uint8(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
 			(*C.uint8_t)(unsafe.Pointer(&vector.uint8Data[0])),
 			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
-			
+
 	case C.DUCKDB_TYPE_FLOAT:
 		if vector.float32Data == nil || len(vector.float32Data) < rowCount {
 			vector.float32Data = make([]float32, rowCount)
@@ -124,11 +122,11 @@ func ExtractColumnBatchTyped(result *C.duckdb_result, colIdx int, startRow int, 
 		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
 			vector.nullMap = make([]bool, rowCount)
 		}
-		
+
 		C.extract_vector_float32(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
 			(*C.float)(unsafe.Pointer(&vector.float32Data[0])),
 			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
-			
+
 	case C.DUCKDB_TYPE_DOUBLE:
 		if vector.float64Data == nil || len(vector.float64Data) < rowCount {
 			vector.float64Data = make([]float64, rowCount)
@@ -136,17 +134,17 @@ func ExtractColumnBatchTyped(result *C.duckdb_result, colIdx int, startRow int, 
 		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
 			vector.nullMap = make([]bool, rowCount)
 		}
-		
+
 		C.extract_vector_float64(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
 			(*C.double)(unsafe.Pointer(&vector.float64Data[0])),
 			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
-			
+
 	case C.DUCKDB_TYPE_VARCHAR:
 		extractStringBatch(result, colIdx, startRow, rowCount, vector)
-		
+
 	case C.DUCKDB_TYPE_BLOB:
 		extractBlobBatch(result, colIdx, startRow, rowCount, vector)
-		
+
 	case C.DUCKDB_TYPE_DATE:
 		if vector.int32Data == nil || len(vector.int32Data) < rowCount {
 			vector.int32Data = make([]int32, rowCount)
@@ -154,11 +152,11 @@ func ExtractColumnBatchTyped(result *C.duckdb_result, colIdx int, startRow int, 
 		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
 			vector.nullMap = make([]bool, rowCount)
 		}
-		
+
 		C.extract_vector_date(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
 			(*C.int32_t)(unsafe.Pointer(&vector.int32Data[0])),
 			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
-		
+
 	case C.DUCKDB_TYPE_TIMESTAMP:
 		if vector.timestampData == nil || len(vector.timestampData) < rowCount {
 			vector.timestampData = make([]int64, rowCount)
@@ -166,21 +164,21 @@ func ExtractColumnBatchTyped(result *C.duckdb_result, colIdx int, startRow int, 
 		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
 			vector.nullMap = make([]bool, rowCount)
 		}
-		
+
 		C.extract_vector_timestamp(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
 			(*C.int64_t)(unsafe.Pointer(&vector.timestampData[0])),
 			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
-			
+
 	default:
 		// For unsupported types, return error
 		PutPooledColumnVector(vector)
 		return nil, fmt.Errorf("unsupported column type: %d", colType)
 	}
-	
+
 	// Set vector metadata
 	vector.columnType = colType
 	vector.length = rowCount
-	
+
 	return vector, nil
 }
 
@@ -193,17 +191,17 @@ func extractStringBatch(result *C.duckdb_result, colIdx int, startRow int, rowCo
 	if vector.nullMap == nil || len(vector.nullMap) < rowCount {
 		vector.nullMap = make([]bool, rowCount)
 	}
-	
+
 	// Temporary storage for string extraction
 	cStrPtrs := make([]*C.char, rowCount)
 	cStrLens := make([]C.idx_t, rowCount)
-	
+
 	// Extract all string pointers and lengths with a single CGO call
 	C.extract_vector_string(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
 		(**C.char)(unsafe.Pointer(&cStrPtrs[0])),
 		(*C.idx_t)(unsafe.Pointer(&cStrLens[0])),
 		(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
-		
+
 	// Copy strings to Go memory
 	for i := 0; i < rowCount; i++ {
 		if !vector.nullMap[i] && cStrPtrs[i] != nil {
@@ -232,17 +230,17 @@ func extractBlobBatch(result *C.duckdb_result, colIdx int, startRow int, rowCoun
 	if vector.nullMap == nil || len(vector.nullMap) < rowCount {
 		vector.nullMap = make([]bool, rowCount)
 	}
-	
+
 	// Temporary storage for blob extraction
 	blobPtrs := make([]unsafe.Pointer, rowCount)
 	blobLens := make([]C.idx_t, rowCount)
-	
+
 	// Extract all blob pointers and lengths with a single CGO call
 	C.extract_vector_blob(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
 		(**C.char)(unsafe.Pointer(&blobPtrs[0])),
 		(*C.idx_t)(unsafe.Pointer(&blobLens[0])),
 		(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
-		
+
 	// Copy blobs to Go memory
 	for i := 0; i < rowCount; i++ {
 		if !vector.nullMap[i] && blobPtrs[i] != nil {
@@ -252,7 +250,7 @@ func extractBlobBatch(result *C.duckdb_result, colIdx int, startRow int, rowCoun
 				// Allocate Go memory for blob
 				blob := make([]byte, blobLen)
 				// Copy blob data
-				copy(blob, (*[1<<30]byte)(blobPtrs[i])[:blobLen:blobLen])
+				copy(blob, (*[1 << 30]byte)(blobPtrs[i])[:blobLen:blobLen])
 				vector.blobData[i] = blob
 			} else {
 				vector.blobData[i] = []byte{}
@@ -822,11 +820,36 @@ func (v *Vector) GetFloat64(row int) (float64, bool) {
 // StringInlined checks if a string is inlined in a DuckDB string struct
 // In DuckDB, strings of 12 bytes or less are stored inline for efficiency
 func StringInlined(s unsafe.Pointer) bool {
-	// In DuckDB, strings under 12 bytes are typically inlined for efficiency
-	// Since we don't have direct access to the internal structure here,
-	// we'll use a simple heuristic - in a real implementation we would
-	// use a C adapter function to check this properly
-	return true
+	// Get pointer to the first byte
+	if s == nil {
+		return false
+	}
+
+	// In DuckDB's actual implementation, a string is represented by:
+	// struct string_t {
+	//     union {
+	//         struct {
+	//             uint32_t length;
+	//             char prefix[4];
+	//             char* ptr;
+	//         } pointer;
+	//         struct {
+	//             uint32_t length;
+	//             char inlined[12];
+	//         } inlined;
+	//     };
+	// }
+	//
+	// The first 4 bytes are the length field (uint32_t)
+	// The string is inlined if the length (in bytes) is less than or equal to 12
+
+	// Read the length field (first 4 bytes)
+	lengthPtr := (*uint32)(s)
+	length := *lengthPtr
+
+	// Check if the length is <= 12 (DuckDB's inline threshold)
+	// Also check for a reasonable maximum to avoid false positives
+	return length <= 12 && length < 1000000 // Sanity check to avoid false positives
 }
 
 // GetString retrieves a string value at the specified row
@@ -844,28 +867,42 @@ func (v *Vector) GetString(row int) (string, bool) {
 		return v.pooledVector.stringData[row], true
 	}
 
-	// We need to use duckdb_value_string to safely extract the string
-	// This is a simplification that doesn't try to access the internal structure
-	// For production code, we would use the extract_vector_string C function
-	//
-	// In a real implementation, we would calculate the pointer as:
-	// stringPtr := unsafe.Pointer(uintptr(v.dataPtr) + uintptr(row)*unsafe.Sizeof(unsafe.Pointer(nil)))
+	// With native DuckDB vector, strings are stored as an array of string_t structs
+	// Each string_t is 16 bytes and follows the layout described in StringInlined
 
-	// Process string data safely
-	var result string
+	// Calculate pointer to the string_t at the given row
+	// Each string_t is 16 bytes (4 bytes length + 12 bytes data/pointer)
+	stringSize := uintptr(16) // Size of string_t struct
+	stringPtr := unsafe.Pointer(uintptr(v.dataPtr) + uintptr(row)*stringSize)
 
-	// For now, use a simplified approach that avoids direct struct access
-	// but still shows the intent of the original code
+	// Read the length field (first 4 bytes)
+	lengthPtr := (*uint32)(stringPtr)
+	if lengthPtr == nil {
+		return "", false
+	}
 
-	// The proper implementation would extract the string pointer and length
-	// then convert it to a Go string, but we need the C adapter functions first
-	// For now, return a placeholder
-	var sb strings.Builder
-	sb.WriteString("String_")
-	sb.WriteString(strconv.Itoa(row))
-	result = sb.String()
+	length := *lengthPtr
+	if length == 0 {
+		return "", true // Empty string
+	}
 
-	return result, true
+	// Check if string is inlined
+	if StringInlined(stringPtr) {
+		// For inlined strings, the data follows the length field (at offset 4)
+		dataPtr := unsafe.Pointer(uintptr(stringPtr) + 4)
+		return C.GoStringN((*C.char)(dataPtr), C.int(length)), true
+	} else {
+		// For non-inlined strings, we need to read the pointer at offset 8
+		// The layout is: [4 bytes length][4 bytes prefix][8 bytes pointer]
+		strPtrPtr := (*uintptr)(unsafe.Pointer(uintptr(stringPtr) + 8))
+		if strPtrPtr == nil || *strPtrPtr == 0 {
+			return "", true // Null or empty string
+		}
+
+		// Read from the external pointer
+		dataPtr := unsafe.Pointer(*strPtrPtr)
+		return C.GoStringN((*C.char)(dataPtr), C.int(length)), true
+	}
 }
 
 // GetBlob retrieves a blob value at the specified row
@@ -883,15 +920,40 @@ func (v *Vector) GetBlob(row int) ([]byte, bool) {
 		return v.pooledVector.blobData[row], true
 	}
 
-	// For now, implement a simplified version that doesn't rely on internal structure access
-	// The proper implementation would use extract_vector_blob function in C
-	// This is just a placeholder until the C function is implemented
+	// With native DuckDB vector, blobs are stored as an array of blob structs
+	// In DuckDB, blobs are represented by a data pointer and a size
+	// struct blob_t {
+	//     void* data;
+	//     idx_t size;
+	// }
 
-	// Return a placeholder blob using efficient string building
-	var sb strings.Builder
-	sb.WriteString("Blob_")
-	sb.WriteString(strconv.Itoa(row))
-	return []byte(sb.String()), true
+	// Calculate pointer to the blob at the given row
+	// Each blob struct is 16 bytes (8 bytes pointer + 8 bytes size)
+	blobSize := uintptr(16)
+	blobPtr := unsafe.Pointer(uintptr(v.dataPtr) + uintptr(row)*blobSize)
+
+	// Get the data pointer (first 8 bytes)
+	dataPtr := (*unsafe.Pointer)(blobPtr)
+	if dataPtr == nil || *dataPtr == nil {
+		return []byte{}, true // Empty blob
+	}
+
+	// Get the size (next 8 bytes)
+	sizePtr := (*C.idx_t)(unsafe.Pointer(uintptr(blobPtr) + 8))
+	if sizePtr == nil {
+		return []byte{}, true
+	}
+
+	size := *sizePtr
+	if size == 0 {
+		return []byte{}, true // Empty blob
+	}
+
+	// Create a new byte slice and copy the data
+	result := make([]byte, size)
+	C.memcpy(unsafe.Pointer(&result[0]), *dataPtr, C.size_t(size))
+
+	return result, true
 }
 
 // GetTimestamp retrieves a timestamp value at the specified row
@@ -928,10 +990,27 @@ func (v *Vector) GetDate(row int) (int32, bool) {
 		return 0, false
 	}
 
-	// For now, use a placeholder implementation
-	// The proper implementation would access the date data directly
-	// but we'll simplify for now until we have proper C adapter functions
-	return int32(row) * 86400, true
+	// If we have a pooled vector, use its data if available
+	if v.pooledVector != nil && len(v.pooledVector.int32Data) > row {
+		return v.pooledVector.int32Data[row], true
+	}
+
+	// In DuckDB, dates are stored as int32 values representing days since 1970-01-01
+	// Each date value is simply a 4-byte integer
+
+	// Get the data pointer as int32 array
+	if v.dataPtr == nil {
+		return 0, false
+	}
+
+	// Access the array of int32 values
+	dateData := (*[1 << 30]int32)(v.dataPtr)
+	if dateData == nil {
+		return 0, false
+	}
+
+	// Return the date value (days since epoch)
+	return dateData[row], true
 }
 
 // ExtractColumn extracts an entire column of data from the vector

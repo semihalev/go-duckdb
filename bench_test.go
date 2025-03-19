@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -1235,7 +1234,6 @@ func BenchmarkNativeCoreIntegration(b *testing.B) {
 				b.Fatalf("Failed to prepare statement: %v", err)
 			}
 
-			b.Logf("Type: %s", reflect.TypeOf(stmt).String())
 			rows, err := stmt.(*FastStmtWrapper).QueryContext(context.TODO(), nil)
 			if err != nil {
 				b.Fatalf("Failed to execute query: %v", err)

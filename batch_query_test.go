@@ -80,7 +80,7 @@ func TestBatchInsertWithDirectAccess(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping test in short mode")
 	}
-	
+
 	// This test requires direct access to the duckdb driver
 	driverName := "duckdb"
 	driver, err := sql.Open(driverName, ":memory:")
@@ -88,7 +88,7 @@ func TestBatchInsertWithDirectAccess(t *testing.T) {
 		t.Fatalf("Failed to open database: %v", err)
 	}
 	defer driver.Close()
-	
+
 	// Create a test table
 	_, err = driver.Exec(`CREATE TABLE test_direct (
 		id INTEGER, 
@@ -98,13 +98,13 @@ func TestBatchInsertWithDirectAccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
-	
+
 	// Use conventional methods to insert data
 	stmt, err := driver.Prepare("INSERT INTO test_direct VALUES (?, ?, ?)")
 	if err != nil {
 		t.Fatalf("Failed to prepare statement: %v", err)
 	}
-	
+
 	// Insert data
 	for i := 1; i <= 5; i++ {
 		_, err := stmt.Exec(i, fmt.Sprintf("Row %d", i), float64(i)*1.5)
@@ -113,29 +113,29 @@ func TestBatchInsertWithDirectAccess(t *testing.T) {
 		}
 	}
 	stmt.Close()
-	
+
 	// Read back the data to verify it
 	rows, err := driver.Query("SELECT id, name, value FROM test_direct ORDER BY id")
 	if err != nil {
 		t.Fatalf("Failed to query data: %v", err)
 	}
 	defer rows.Close()
-	
+
 	count := 0
 	for rows.Next() {
 		var id int
 		var name string
 		var value float64
-		
+
 		err := rows.Scan(&id, &name, &value)
 		if err != nil {
 			t.Fatalf("Failed to scan row: %v", err)
 		}
-		
+
 		expectedID := count + 1
 		expectedName := fmt.Sprintf("Row %d", expectedID)
 		expectedValue := float64(expectedID) * 1.5
-		
+
 		if id != expectedID {
 			t.Errorf("Expected id %d, got %d", expectedID, id)
 		}
@@ -145,14 +145,14 @@ func TestBatchInsertWithDirectAccess(t *testing.T) {
 		if value != expectedValue {
 			t.Errorf("Expected value %f, got %f", expectedValue, value)
 		}
-		
+
 		count++
 	}
-	
+
 	if err := rows.Err(); err != nil {
 		t.Fatalf("Error during rows iteration: %v", err)
 	}
-	
+
 	if count != 5 {
 		t.Errorf("Expected 5 rows, got %d", count)
 	}

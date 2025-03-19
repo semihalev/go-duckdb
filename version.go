@@ -1,4 +1,4 @@
-// Package duckdb provides a zero-allocation, high-performance SQL driver for DuckDB in Go.
+// Package duckdb provides low-level, high-performance SQL driver for DuckDB in Go.
 package duckdb
 
 /*

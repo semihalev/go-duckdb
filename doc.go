@@ -1,5 +1,5 @@
 /*
-Package duckdb provides a zero-allocation, high-performance SQL driver for DuckDB in Go.
+Package duckdb provides low-level, high-performance SQL driver for DuckDB in Go.
 
 This driver implements the database/sql interfaces for DuckDB, a high-performance analytical database.
 It is designed to be fast, with minimal allocations, and to support all DuckDB features.

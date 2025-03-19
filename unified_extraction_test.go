@@ -102,7 +102,7 @@ func TestDirectResultExtraction(t *testing.T) {
 	if len(tsVals) != 999 {
 		t.Errorf("Expected 999 timestamp values, got %d", len(tsVals))
 	}
-	
+
 	// Test date extraction
 	dateVals, dateNulls, err := result.ExtractDateColumn(5)
 	if err != nil {
@@ -165,11 +165,11 @@ func TestDirectResultNullValues(t *testing.T) {
 	if len(int32Nulls) != 7 {
 		t.Errorf("Expected 7 int32 values, got %d", len(int32Nulls))
 	}
-	
+
 	// Print the values and nulls for debugging
 	t.Logf("int32 values: %v", intVals)
 	t.Logf("int32 nulls: %v", int32Nulls)
-	
+
 	// Check if the second value (index 1) is NULL
 	nullFound := false
 	for i, isNull := range int32Nulls {
@@ -178,7 +178,7 @@ func TestDirectResultNullValues(t *testing.T) {
 			nullFound = true
 		}
 	}
-	
+
 	if !nullFound {
 		t.Errorf("No NULL values found in int32 column")
 	}
@@ -218,7 +218,7 @@ func TestDirectResultNullValues(t *testing.T) {
 	if !tsNulls[5] {
 		t.Errorf("Expected NULL for timestamp at index 5")
 	}
-	
+
 	// Test date extraction with nulls
 	_, dateNulls, err := result.ExtractDateColumn(5)
 	if err != nil {

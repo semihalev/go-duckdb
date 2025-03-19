@@ -1,6 +1,6 @@
 # go-duckdb
 
-A zero-allocation, high-performance, zero-dependency SQL driver for DuckDB in Go.
+A low-level, high-performance, zero-dependency SQL driver for DuckDB in Go.
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/semihalev/go-duckdb.svg)](https://pkg.go.dev/github.com/semihalev/go-duckdb)
 [![Go Report Card](https://goreportcard.com/badge/github.com/semihalev/go-duckdb)](https://goreportcard.com/report/github.com/semihalev/go-duckdb)
@@ -8,7 +8,7 @@ A zero-allocation, high-performance, zero-dependency SQL driver for DuckDB in Go
 
 ## Features
 
-- Zero allocation (minimizes GC pressure)
+- Minimize allocation (minimizes GC pressure)
 - High performance with Go 1.23 generics
 - Memory-optimized with tiered buffer pools and string caching
 - Thread-safe with atomic operations
