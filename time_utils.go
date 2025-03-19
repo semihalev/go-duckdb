@@ -80,14 +80,3 @@ func TimeFromTimestamp(ts C.duckdb_timestamp) time.Time {
 	// Create time from Unix timestamp with nanoseconds
 	return time.Unix(seconds, nanos).UTC()
 }
-
-// microsToDuckDBTime converts microseconds since epoch to a Go time.Time.
-// This is used by the fallback implementation when the native library is not available.
-func microsToDuckDBTime(micros int64) time.Time {
-	// Calculate seconds and nanoseconds
-	seconds := micros / 1000000
-	nanos := (micros % 1000000) * 1000
-
-	// Create time from Unix timestamp with nanoseconds
-	return time.Unix(seconds, nanos).UTC()
-}
