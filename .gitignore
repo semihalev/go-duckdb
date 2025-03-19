@@ -20,6 +20,7 @@
 vendor/
 build/
 benchmark-comparison/
+wiki/
 
 # IDE files
 .idea/

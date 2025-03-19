@@ -8,7 +8,7 @@ Go-DuckDB is a zero-dependency, high-performance driver for DuckDB, a fast analy
 1. Standard database/sql interface for compatibility with Go's ecosystem
 2. Low-level direct API for maximum performance with minimal allocations
 
-The driver is designed for maximum performance with minimal memory overhead, making it ideal for both 
+The driver is designed for maximum performance with minimal memory overhead, making it ideal for both
 application integration and high-performance analytical workloads.
 
 # Standard SQL API Example
@@ -90,9 +90,9 @@ For maximum performance, use the direct API:
 
 		// Create a table
 		_, err = conn.ExecDirect(`CREATE TABLE analytics (
-			id INTEGER, 
-			category VARCHAR, 
-			value DOUBLE, 
+			id INTEGER,
+			category VARCHAR,
+			value DOUBLE,
 			active BOOLEAN
 		)`)
 		if err != nil {
@@ -100,7 +100,7 @@ For maximum performance, use the direct API:
 		}
 
 		// Insert sample data
-		_, err = conn.ExecDirect(`INSERT INTO analytics VALUES 
+		_, err = conn.ExecDirect(`INSERT INTO analytics VALUES
 			(1, 'A', 10.5, true),
 			(2, 'B', 20.3, false),
 			(3, 'A', 15.2, true),
@@ -112,12 +112,12 @@ For maximum performance, use the direct API:
 
 		// Use the high-performance direct result API
 		result, err := conn.QueryDirectResult(`
-			SELECT 
-				id, 
-				category, 
-				value, 
-				active 
-			FROM analytics 
+			SELECT
+				id,
+				category,
+				value,
+				active
+			FROM analytics
 			WHERE value > 10.0
 		`)
 		if err != nil {
@@ -170,20 +170,23 @@ The driver offers several high-performance features:
 1. Zero Allocation Design - Minimizes GC pressure and memory overhead
 2. Dual API Support - Standard database/sql interface and low-level direct API
 3. Advanced Optimizations:
-   - SIMD acceleration with AVX2 and ARM64 NEON
-   - Zero-copy column extraction
-   - Tiered buffer pools
-   - String caching and deduplication
+  - SIMD acceleration with AVX2 and ARM64 NEON
+  - Zero-copy column extraction
+  - Tiered buffer pools
+  - String caching and deduplication
+
 4. High-Performance Features:
-   - Batch parameter binding
-   - Appender API for bulk data insertion
-   - Direct column-wise extraction
-   - Memory mapping with zero-copy architecture
+  - Batch parameter binding
+  - Appender API for bulk data insertion
+  - Direct column-wise extraction
+  - Memory mapping with zero-copy architecture
+
 5. Full DuckDB Support:
-   - All DuckDB data types
-   - Transactions with proper isolation
-   - Context cancellation
-   - Thread-safe operations
+  - All DuckDB data types
+  - Transactions with proper isolation
+  - Context cancellation
+  - Thread-safe operations
+
 6. Zero Go Dependencies - Lightweight and portable
 
 # Connection String
