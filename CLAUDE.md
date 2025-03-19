@@ -25,6 +25,7 @@ Go-DuckDB is a Go driver for DuckDB, focusing on high performance with native op
 - `vector_pool.go` - Memory pooling for column vectors to minimize allocations
 - `appender.go` - Efficient data appending to DuckDB tables
 - `appender_tx.go` - Transaction support for data appending operations
+- `result_extraction.go` - Efficient extraction of results from DuckDB
 - `buffer_pool.go` - Buffer pooling implementation for memory management
 - `columnar_result.go` - Columnar result representation for efficient data access
 - `errors.go` - Error definitions and handling for DuckDB operations

@@ -4,7 +4,9 @@ package duckdb
 /*
 // Use only necessary includes here - CGO directives are defined in duckdb.go
 #include <stdlib.h>
+#include <string.h>
 #include <duckdb.h>
+#include "duckdb_go_adapter.h"
 */
 import "C"
 
@@ -16,7 +18,8 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"time"
+	"time" // Adding unsafe import for CGO operations
+	"unsafe"
 )
 
 // Connection represents a connection to a DuckDB database.
@@ -367,9 +370,11 @@ func (c *Connection) QueryColumnar(query string) (*ColumnarResult, error) {
 				result.NullMasks[i] = nulls
 			}
 		case C.DUCKDB_TYPE_INTEGER:
-			result.Columns[i], result.NullMasks[i], err = directResult.ExtractInt32Column(i)
+			// Use generic extraction for int32 columns
+			result.Columns[i], result.NullMasks[i], err = ExtractInt32ColumnGeneric(directResult, i)
 		case C.DUCKDB_TYPE_BIGINT:
-			result.Columns[i], result.NullMasks[i], err = directResult.ExtractInt64Column(i)
+			// Use generic extraction for int64 columns
+			result.Columns[i], result.NullMasks[i], err = ExtractInt64ColumnGeneric(directResult, i)
 		case C.DUCKDB_TYPE_UTINYINT:
 			// Handle via uint8
 			vals, nulls, err := directResult.ExtractUint8Column(i)
@@ -406,26 +411,26 @@ func (c *Connection) QueryColumnar(query string) (*ColumnarResult, error) {
 				result.NullMasks[i] = nulls
 			}
 		case C.DUCKDB_TYPE_DOUBLE:
-			result.Columns[i], result.NullMasks[i], err = directResult.ExtractFloat64Column(i)
+			// Use generic extraction for float64 columns
+			result.Columns[i], result.NullMasks[i], err = ExtractFloat64ColumnGeneric(directResult, i)
 		case C.DUCKDB_TYPE_VARCHAR:
-			result.Columns[i], result.NullMasks[i], err = directResult.ExtractStringColumn(i)
+			// Use generic extraction for string columns
+			result.Columns[i], result.NullMasks[i], err = ExtractStringColumnGeneric(directResult, i)
 		case C.DUCKDB_TYPE_BLOB:
-			result.Columns[i], result.NullMasks[i], err = directResult.ExtractBlobColumn(i)
+			// Use generic extraction for blob columns
+			result.Columns[i], result.NullMasks[i], err = ExtractBlobColumnGeneric(directResult, i)
 		case C.DUCKDB_TYPE_TIMESTAMP:
-			vals, nulls, err := directResult.ExtractTimestampColumn(i)
+			// Use generic extraction for timestamp columns
+			vals, nulls, err := ExtractTimestampColumnGeneric(directResult, i)
 			if err == nil {
-				// Convert from microseconds to time.Time
-				times := make([]time.Time, len(vals))
-				for j, micros := range vals {
-					if !nulls[j] {
-						times[j] = time.Unix(micros/1000000, (micros%1000000)*1000)
-					}
-				}
+				// Convert from microseconds to time.Time using helper function
+				times := ConvertTimestampsToTime(vals, nulls)
 				result.Columns[i] = times
 				result.NullMasks[i] = nulls
 			}
 		case C.DUCKDB_TYPE_DATE:
-			vals, nulls, err := directResult.ExtractDateColumn(i)
+			// Use generic extraction for date columns
+			vals, nulls, err := ExtractDateColumnGeneric(directResult, i)
 			if err == nil {
 				// Convert from days to time.Time
 				dates := make([]time.Time, len(vals))
@@ -506,6 +511,8 @@ func (c *Connection) ExecDirect(query string) (int64, error) {
 
 // BatchExec prepares and executes a statement with multiple parameter sets in a single batch operation
 // This provides a significant performance improvement over executing multiple individual statements
+// BatchExec prepares and executes a statement with multiple parameter sets in a single batch operation
+// This implementation uses true batch processing to minimize CGO boundary crossings
 func (conn *Connection) BatchExec(query string, args []driver.Value) (driver.Result, error) {
 	if atomic.LoadInt32(&conn.closed) != 0 {
 		return nil, driver.ErrBadConn
@@ -516,6 +523,302 @@ func (conn *Connection) BatchExec(query string, args []driver.Value) (driver.Res
 		return nil, fmt.Errorf("no parameter sets provided")
 	}
 
+	// For small batch sizes, use the original implementation to avoid overhead
+	if len(args) <= 2 {
+		return conn.batchExecSmall(query, args)
+	}
+
+	// Count the number of parameters in the first set
+	var firstParamSetLen int
+	switch v := args[0].(type) {
+	case []interface{}:
+		firstParamSetLen = len(v)
+	default:
+		return nil, fmt.Errorf("expected []interface{} parameter set, got %T", args[0])
+	}
+
+	// Acquire exclusive access to the connection
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	// Check connection state again after acquiring the lock
+	if atomic.LoadInt32(&conn.closed) != 0 {
+		return nil, driver.ErrBadConn
+	}
+
+	// Prepare the statement once for all executions
+	cQuery := cString(query)
+	defer freeString(cQuery)
+
+	var stmt C.duckdb_prepared_statement
+	if err := C.duckdb_prepare(*conn.conn, cQuery, &stmt); err == C.DuckDBError {
+		// Get error message and clean up
+		errMsg := C.GoString(C.duckdb_prepare_error(stmt))
+		C.duckdb_destroy_prepare(&stmt)
+		return nil, fmt.Errorf("failed to prepare statement: %s", errMsg)
+	}
+	// Ensure we clean up the prepared statement
+	defer C.duckdb_destroy_prepare(&stmt)
+
+	// We can use the statement directly
+	preparedStmt := stmt
+
+	// Process in batches of maxBatchSize to limit memory usage
+	const maxBatchSize = 100
+	var totalRowsAffected int64
+
+	// Process in chunks to avoid excessive memory usage
+	for i := 0; i < len(args); i += maxBatchSize {
+		// Calculate end of this batch (might be smaller at the end)
+		end := i + maxBatchSize
+		if end > len(args) {
+			end = len(args)
+		}
+		batchSize := end - i
+
+		// Create parameter batch structure
+		batch := C.create_param_batch(C.int32_t(firstParamSetLen), C.int32_t(batchSize))
+		if batch == nil {
+			return nil, fmt.Errorf("failed to create parameter batch")
+		}
+
+		// Ensure cleanup of batch resources
+		defer C.free_param_batch(batch)
+
+		// Track C strings that need to be freed after binding
+		var cStrings []*C.char
+		defer func() {
+			// Free all C strings at once after binding
+			for _, str := range cStrings {
+				C.duckdb_free(unsafe.Pointer(str))
+			}
+		}()
+
+		// Fill the parameter batch with all parameter sets
+		for batchIdx := 0; batchIdx < batchSize; batchIdx++ {
+			paramArg := args[i+batchIdx]
+			paramSet, ok := paramArg.([]interface{})
+			if !ok {
+				return nil, fmt.Errorf("parameter set %d is not []interface{}", i+batchIdx)
+			}
+
+			if len(paramSet) != firstParamSetLen {
+				return nil, fmt.Errorf("parameter set %d has %d parameters, expected %d",
+					i+batchIdx, len(paramSet), firstParamSetLen)
+			}
+
+			// Fill in each parameter in this set
+			for paramIdx := 0; paramIdx < firstParamSetLen; paramIdx++ {
+				// Calculate flat index in the batch arrays
+				flatIdx := batchIdx*firstParamSetLen + paramIdx
+
+				// Get a pointer to a specific position in the arrays
+				var nullFlagPtr *C.int8_t = (*C.int8_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.null_flags)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.null_flags)))
+				var paramTypePtr *C.int32_t = (*C.int32_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.param_types)) + uintptr(paramIdx)*unsafe.Sizeof(*batch.param_types)))
+
+				// Handle null value
+				if paramSet[paramIdx] == nil {
+					*nullFlagPtr = 1
+					*paramTypePtr = C.PARAM_NULL
+					continue
+				}
+
+				// Set null flag to false for non-null values
+				*nullFlagPtr = 0
+
+				// Bind based on type
+				switch v := paramSet[paramIdx].(type) {
+				case bool:
+					*paramTypePtr = C.PARAM_BOOL
+					var boolDataPtr *C.int8_t = (*C.int8_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.bool_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.bool_data)))
+					if v {
+						*boolDataPtr = 1
+					} else {
+						*boolDataPtr = 0
+					}
+
+				case int8:
+					*paramTypePtr = C.PARAM_INT8
+					var int8DataPtr *C.int8_t = (*C.int8_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.int8_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.int8_data)))
+					*int8DataPtr = C.int8_t(v)
+
+				case int16:
+					*paramTypePtr = C.PARAM_INT16
+					var int16DataPtr *C.int16_t = (*C.int16_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.int16_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.int16_data)))
+					*int16DataPtr = C.int16_t(v)
+
+				case int32:
+					*paramTypePtr = C.PARAM_INT32
+					var int32DataPtr *C.int32_t = (*C.int32_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.int32_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.int32_data)))
+					*int32DataPtr = C.int32_t(v)
+
+				case int64:
+					*paramTypePtr = C.PARAM_INT64
+					var int64DataPtr *C.int64_t = (*C.int64_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.int64_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.int64_data)))
+					*int64DataPtr = C.int64_t(v)
+
+				case int:
+					*paramTypePtr = C.PARAM_INT64
+					var int64DataPtr *C.int64_t = (*C.int64_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.int64_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.int64_data)))
+					*int64DataPtr = C.int64_t(v)
+
+				case uint8:
+					*paramTypePtr = C.PARAM_UINT8
+					var uint8DataPtr *C.uint8_t = (*C.uint8_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.uint8_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.uint8_data)))
+					*uint8DataPtr = C.uint8_t(v)
+
+				case uint16:
+					*paramTypePtr = C.PARAM_UINT16
+					var uint16DataPtr *C.uint16_t = (*C.uint16_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.uint16_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.uint16_data)))
+					*uint16DataPtr = C.uint16_t(v)
+
+				case uint32:
+					*paramTypePtr = C.PARAM_UINT32
+					var uint32DataPtr *C.uint32_t = (*C.uint32_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.uint32_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.uint32_data)))
+					*uint32DataPtr = C.uint32_t(v)
+
+				case uint64:
+					*paramTypePtr = C.PARAM_UINT64
+					var uint64DataPtr *C.uint64_t = (*C.uint64_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.uint64_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.uint64_data)))
+					*uint64DataPtr = C.uint64_t(v)
+
+				case uint:
+					*paramTypePtr = C.PARAM_UINT64
+					var uint64DataPtr *C.uint64_t = (*C.uint64_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.uint64_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.uint64_data)))
+					*uint64DataPtr = C.uint64_t(v)
+
+				case float32:
+					*paramTypePtr = C.PARAM_FLOAT
+					var floatDataPtr *C.float = (*C.float)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.float_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.float_data)))
+					*floatDataPtr = C.float(v)
+
+				case float64:
+					*paramTypePtr = C.PARAM_DOUBLE
+					var doubleDataPtr *C.double = (*C.double)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.double_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.double_data)))
+					*doubleDataPtr = C.double(v)
+
+				case string:
+					*paramTypePtr = C.PARAM_STRING
+
+					// Create C string
+					cStr := C.CString(v)
+					cStrings = append(cStrings, cStr) // Track for deferred cleanup
+
+					// Store string pointer
+					var stringDataPtr **C.char = (**C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.string_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.string_data)))
+					*stringDataPtr = cStr
+
+				case []byte:
+					*paramTypePtr = C.PARAM_BLOB
+
+					var blobDataPtr **C.void = (**C.void)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.blob_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.blob_data)))
+					var blobLengthPtr *C.int64_t = (*C.int64_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.blob_lengths)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.blob_lengths)))
+
+					if len(v) == 0 {
+						// For empty blobs, use nil pointer with size 0
+						*blobDataPtr = nil
+						*blobLengthPtr = 0
+					} else {
+						// For non-empty blobs, allocate and copy the data
+						blobSize := C.size_t(len(v))
+						blobData := C.malloc(blobSize)
+						if blobData == nil {
+							return nil, fmt.Errorf("failed to allocate memory for blob parameter at set %d, index %d",
+								i+batchIdx, paramIdx)
+						}
+
+						// Copy the blob data
+						C.memcpy(blobData, unsafe.Pointer(&v[0]), blobSize)
+
+						// Store blob data and length
+						*blobDataPtr = (*C.void)(blobData)
+						*blobLengthPtr = C.int64_t(len(v))
+
+						// Add to resources for cleanup
+						if C.ensure_param_batch_resource_capacity(batch) == 0 {
+							C.free(blobData)
+							return nil, fmt.Errorf("failed to expand resource capacity for blob parameter")
+						}
+
+						// Get current resource count
+						resourceCount := int(batch.resource_count)
+
+						// Calculate pointer to the correct resource slot
+						resourcesPtr := (**C.void)(unsafe.Pointer(
+							uintptr(unsafe.Pointer(batch.resources)) +
+								uintptr(resourceCount)*unsafe.Sizeof(*batch.resources)))
+
+						// Store the blob data pointer in the resources array
+						*resourcesPtr = (*C.void)(blobData)
+
+						// Increment the resource count
+						batch.resource_count++
+					}
+
+				case time.Time:
+					*paramTypePtr = C.PARAM_TIMESTAMP
+
+					// Convert to DuckDB timestamp (microseconds since 1970-01-01)
+					micros := v.Unix()*1000000 + int64(v.Nanosecond())/1000
+					var timestampDataPtr *C.int64_t = (*C.int64_t)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.timestamp_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.timestamp_data)))
+					*timestampDataPtr = C.int64_t(micros)
+
+				default:
+					// For unsupported types, use string representation
+					*paramTypePtr = C.PARAM_STRING
+
+					// Create C string with string representation
+					strVal := fmt.Sprintf("%v", v)
+					cStr := C.CString(strVal)
+					cStrings = append(cStrings, cStr) // Track for deferred cleanup
+
+					// Store string pointer
+					var stringDataPtr **C.char = (**C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(batch.string_data)) + uintptr(flatIdx)*unsafe.Sizeof(*batch.string_data)))
+					*stringDataPtr = cStr
+				}
+			}
+		}
+
+		// Create result buffer to receive execution results
+		buffer := C.malloc(C.sizeof_result_buffer_t)
+		if buffer == nil {
+			return nil, fmt.Errorf("failed to allocate memory for result buffer")
+		}
+		defer C.free(buffer)
+
+		// Initialize the result buffer
+		result_buffer := (*C.result_buffer_t)(buffer)
+		result_buffer.rows_affected = 0
+		result_buffer.row_count = 0
+		result_buffer.column_count = 0
+		result_buffer.error_code = 0
+		result_buffer.error_message = nil
+		result_buffer.ref_count = 1
+
+		// Execute the batch
+		ret := C.bind_and_execute_batch(preparedStmt, batch, result_buffer)
+		if ret == 0 || result_buffer.error_code != 0 {
+			if result_buffer.error_message != nil {
+				errMsg := C.GoString(result_buffer.error_message)
+				return nil, fmt.Errorf("failed to execute batch: %s", errMsg)
+			}
+			return nil, fmt.Errorf("failed to execute batch")
+		}
+
+		// Add to total rows affected
+		totalRowsAffected += int64(result_buffer.rows_affected)
+	}
+
+	// Return a result with the total rows affected
+	return &QueryResult{
+		rowsAffected: totalRowsAffected,
+		lastInsertID: 0, // DuckDB doesn't support last insert ID
+	}, nil
+}
+
+// batchExecSmall handles small batch sizes with the original implementation
+// This avoids the overhead of the batch processing for small batches
+func (conn *Connection) batchExecSmall(query string, args []driver.Value) (driver.Result, error) {
 	// Count the number of parameters in the first set
 	var firstParamSetLen int
 	switch v := args[0].(type) {
@@ -529,7 +832,6 @@ func (conn *Connection) BatchExec(query string, args []driver.Value) (driver.Res
 	var totalRowsAffected int64
 
 	// Loop through each parameter set and execute individually
-	// This is a fallback implementation until we have true batch execution
 	for i, arg := range args {
 		paramSet, ok := arg.([]interface{})
 		if !ok {
@@ -542,7 +844,6 @@ func (conn *Connection) BatchExec(query string, args []driver.Value) (driver.Res
 		}
 
 		// Prepare a statement for this execution
-		// We'll reuse the statement for each parameter set
 		stmt, err := conn.Prepare(query)
 		if err != nil {
 			return nil, fmt.Errorf("failed to prepare statement: %w", err)
@@ -572,7 +873,7 @@ func (conn *Connection) BatchExec(query string, args []driver.Value) (driver.Res
 	}
 
 	// Return a result with the total rows affected
-	return &Result{
+	return &QueryResult{
 		rowsAffected: totalRowsAffected,
 		lastInsertID: 0, // DuckDB doesn't support last insert ID
 	}, nil
@@ -672,7 +973,7 @@ func (conn *Connection) BatchExecContext(ctx context.Context, query string, args
 	}
 
 	// Return a result with the total rows affected
-	return &Result{
+	return &QueryResult{
 		rowsAffected: totalRowsAffected,
 		lastInsertID: 0, // DuckDB doesn't support last insert ID
 	}, nil

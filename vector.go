@@ -4,6 +4,7 @@ package duckdb
 #include <stdlib.h>
 #include <string.h>
 #include <duckdb.h>
+#include "duckdb_go_adapter.h"
 */
 import "C"
 
@@ -15,6 +16,254 @@ import (
 	"sync"
 	"unsafe"
 )
+
+// ExtractColumnBatchTyped extracts a column of values from a result set with a single CGO crossing
+// This unified extraction method provides several key advantages:
+// 1. Reduces code duplication by handling all data types in a single method
+// 2. Minimizes CGO overhead by crossing the boundary only once per column
+// 3. Uses type-specific vectors to avoid interface{} boxing/unboxing
+// 4. Integrates with the object pooling system to reduce GC pressure
+// 5. Supports batched extraction for improved performance
+//
+// It returns a properly typed ColumnVector containing the extracted values.
+// This is the recommended method for high-performance columnar data access.
+//
+// IMPORTANT: This method is the common extraction utility used by DirectResult,
+// Rows, and other components that need to extract columns efficiently.
+func ExtractColumnBatchTyped(result *C.duckdb_result, colIdx int, startRow int, rowCount int) (*ColumnVector, error) {
+	// Validate parameters
+	if result == nil {
+		return nil, fmt.Errorf("result is nil")
+	}
+	
+	// Get column type
+	colType := C.duckdb_column_type(result, C.idx_t(colIdx))
+	
+	// Get a pooled vector for this type to avoid allocations
+	vector := GetPooledColumnVector(colType, rowCount)
+	
+	// Extract data with a single CGO crossing based on type
+	switch colType {
+	case C.DUCKDB_TYPE_BOOLEAN:
+		if vector.boolData == nil || len(vector.boolData) < rowCount {
+			vector.boolData = make([]bool, rowCount)
+		}
+		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
+			vector.nullMap = make([]bool, rowCount)
+		}
+		
+		// Extract data with a single CGO call
+		C.extract_vector_bool(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
+			(*C.bool)(unsafe.Pointer(&vector.boolData[0])),
+			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
+			
+	case C.DUCKDB_TYPE_TINYINT:
+		if vector.int8Data == nil || len(vector.int8Data) < rowCount {
+			vector.int8Data = make([]int8, rowCount)
+		}
+		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
+			vector.nullMap = make([]bool, rowCount)
+		}
+		
+		C.extract_vector_int8(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
+			(*C.int8_t)(unsafe.Pointer(&vector.int8Data[0])),
+			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
+			
+	case C.DUCKDB_TYPE_SMALLINT:
+		if vector.int16Data == nil || len(vector.int16Data) < rowCount {
+			vector.int16Data = make([]int16, rowCount)
+		}
+		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
+			vector.nullMap = make([]bool, rowCount)
+		}
+		
+		C.extract_vector_int16(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
+			(*C.int16_t)(unsafe.Pointer(&vector.int16Data[0])),
+			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
+			
+	case C.DUCKDB_TYPE_INTEGER:
+		if vector.int32Data == nil || len(vector.int32Data) < rowCount {
+			vector.int32Data = make([]int32, rowCount)
+		}
+		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
+			vector.nullMap = make([]bool, rowCount)
+		}
+		
+		C.extract_vector_int32(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
+			(*C.int32_t)(unsafe.Pointer(&vector.int32Data[0])),
+			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
+			
+	case C.DUCKDB_TYPE_BIGINT:
+		if vector.int64Data == nil || len(vector.int64Data) < rowCount {
+			vector.int64Data = make([]int64, rowCount)
+		}
+		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
+			vector.nullMap = make([]bool, rowCount)
+		}
+		
+		C.extract_vector_int64(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
+			(*C.int64_t)(unsafe.Pointer(&vector.int64Data[0])),
+			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
+			
+	case C.DUCKDB_TYPE_UTINYINT:
+		if vector.uint8Data == nil || len(vector.uint8Data) < rowCount {
+			vector.uint8Data = make([]uint8, rowCount)
+		}
+		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
+			vector.nullMap = make([]bool, rowCount)
+		}
+		
+		C.extract_vector_uint8(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
+			(*C.uint8_t)(unsafe.Pointer(&vector.uint8Data[0])),
+			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
+			
+	case C.DUCKDB_TYPE_FLOAT:
+		if vector.float32Data == nil || len(vector.float32Data) < rowCount {
+			vector.float32Data = make([]float32, rowCount)
+		}
+		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
+			vector.nullMap = make([]bool, rowCount)
+		}
+		
+		C.extract_vector_float32(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
+			(*C.float)(unsafe.Pointer(&vector.float32Data[0])),
+			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
+			
+	case C.DUCKDB_TYPE_DOUBLE:
+		if vector.float64Data == nil || len(vector.float64Data) < rowCount {
+			vector.float64Data = make([]float64, rowCount)
+		}
+		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
+			vector.nullMap = make([]bool, rowCount)
+		}
+		
+		C.extract_vector_float64(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
+			(*C.double)(unsafe.Pointer(&vector.float64Data[0])),
+			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
+			
+	case C.DUCKDB_TYPE_VARCHAR:
+		extractStringBatch(result, colIdx, startRow, rowCount, vector)
+		
+	case C.DUCKDB_TYPE_BLOB:
+		extractBlobBatch(result, colIdx, startRow, rowCount, vector)
+		
+	case C.DUCKDB_TYPE_DATE:
+		if vector.int32Data == nil || len(vector.int32Data) < rowCount {
+			vector.int32Data = make([]int32, rowCount)
+		}
+		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
+			vector.nullMap = make([]bool, rowCount)
+		}
+		
+		C.extract_vector_date(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
+			(*C.int32_t)(unsafe.Pointer(&vector.int32Data[0])),
+			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
+		
+	case C.DUCKDB_TYPE_TIMESTAMP:
+		if vector.timestampData == nil || len(vector.timestampData) < rowCount {
+			vector.timestampData = make([]int64, rowCount)
+		}
+		if vector.nullMap == nil || len(vector.nullMap) < rowCount {
+			vector.nullMap = make([]bool, rowCount)
+		}
+		
+		C.extract_vector_timestamp(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
+			(*C.int64_t)(unsafe.Pointer(&vector.timestampData[0])),
+			(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
+			
+	default:
+		// For unsupported types, return error
+		PutPooledColumnVector(vector)
+		return nil, fmt.Errorf("unsupported column type: %d", colType)
+	}
+	
+	// Set vector metadata
+	vector.columnType = colType
+	vector.length = rowCount
+	
+	return vector, nil
+}
+
+// Helper function for string batch extraction
+func extractStringBatch(result *C.duckdb_result, colIdx int, startRow int, rowCount int, vector *ColumnVector) {
+	// Prepare string storage
+	if vector.stringData == nil || len(vector.stringData) < rowCount {
+		vector.stringData = make([]string, rowCount)
+	}
+	if vector.nullMap == nil || len(vector.nullMap) < rowCount {
+		vector.nullMap = make([]bool, rowCount)
+	}
+	
+	// Temporary storage for string extraction
+	cStrPtrs := make([]*C.char, rowCount)
+	cStrLens := make([]C.idx_t, rowCount)
+	
+	// Extract all string pointers and lengths with a single CGO call
+	C.extract_vector_string(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
+		(**C.char)(unsafe.Pointer(&cStrPtrs[0])),
+		(*C.idx_t)(unsafe.Pointer(&cStrLens[0])),
+		(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
+		
+	// Copy strings to Go memory
+	for i := 0; i < rowCount; i++ {
+		if !vector.nullMap[i] && cStrPtrs[i] != nil {
+			// Get string length
+			strLen := int(cStrLens[i])
+			if strLen > 0 {
+				// Convert C string to Go string (makes a copy)
+				vector.stringData[i] = C.GoStringN(cStrPtrs[i], C.int(strLen))
+				// Free C string
+				C.duckdb_free(unsafe.Pointer(cStrPtrs[i]))
+			} else {
+				vector.stringData[i] = ""
+			}
+		} else {
+			vector.stringData[i] = ""
+		}
+	}
+}
+
+// Helper function for blob batch extraction
+func extractBlobBatch(result *C.duckdb_result, colIdx int, startRow int, rowCount int, vector *ColumnVector) {
+	// Prepare blob storage
+	if vector.blobData == nil || len(vector.blobData) < rowCount {
+		vector.blobData = make([][]byte, rowCount)
+	}
+	if vector.nullMap == nil || len(vector.nullMap) < rowCount {
+		vector.nullMap = make([]bool, rowCount)
+	}
+	
+	// Temporary storage for blob extraction
+	blobPtrs := make([]unsafe.Pointer, rowCount)
+	blobLens := make([]C.idx_t, rowCount)
+	
+	// Extract all blob pointers and lengths with a single CGO call
+	C.extract_vector_blob(result, C.idx_t(colIdx), C.idx_t(startRow), C.idx_t(rowCount),
+		(**C.char)(unsafe.Pointer(&blobPtrs[0])),
+		(*C.idx_t)(unsafe.Pointer(&blobLens[0])),
+		(*C.bool)(unsafe.Pointer(&vector.nullMap[0])))
+		
+	// Copy blobs to Go memory
+	for i := 0; i < rowCount; i++ {
+		if !vector.nullMap[i] && blobPtrs[i] != nil {
+			// Get blob length
+			blobLen := int(blobLens[i])
+			if blobLen > 0 {
+				// Allocate Go memory for blob
+				blob := make([]byte, blobLen)
+				// Copy blob data
+				copy(blob, (*[1<<30]byte)(blobPtrs[i])[:blobLen:blobLen])
+				vector.blobData[i] = blob
+			} else {
+				vector.blobData[i] = []byte{}
+			}
+			// Free C memory after copying
+			C.duckdb_free(blobPtrs[i])
+		} else {
+			vector.blobData[i] = []byte{}
+		}
+	}
+}
 
 // Vector represents a DuckDB vector - a horizontal slice of a column
 // This aligns with DuckDB's native vector concept and provides efficient
@@ -147,7 +396,8 @@ void extract_vector_date(duckdb_result *result, idx_t col_idx, idx_t offset, idx
 */
 
 // extractResultColumnBatch efficiently extracts data from a result to a column vector
-// This is a more optimized version of the batch extraction code from batch_query.go
+// This is a highly optimized version that leverages DuckDB's C adapter functions
+// to minimize CGO boundary crossings
 func extractResultColumnBatch(result *C.duckdb_result, colIdx, startRow, batchSize int, vector *ColumnVector) {
 	// Get DuckDB C types ready
 	cColIdx := C.idx_t(colIdx)
@@ -155,6 +405,7 @@ func extractResultColumnBatch(result *C.duckdb_result, colIdx, startRow, batchSi
 	colType := C.duckdb_column_type(result, cColIdx)
 
 	// Define block size for processing to reduce CGO boundary crossings
+	// This value can be made configurable for workload-specific tuning
 	const blockSize = 64
 
 	// Process the data in blocks to minimize CGO boundary crossings
@@ -166,131 +417,127 @@ func extractResultColumnBatch(result *C.duckdb_result, colIdx, startRow, batchSi
 		}
 		actualBlockSize := blockEnd - blockStart
 
-		// Extract null values for this block
-		for i := 0; i < actualBlockSize; i++ {
-			rowIdx := cStartRow + C.idx_t(blockStart+i)
-			isNull := C.duckdb_value_is_null(result, cColIdx, rowIdx)
-			vector.nullMap[blockStart+i] = cBoolToGo(isNull)
-		}
+		// Adjust pointers and indices for this block
+		blockStartRow := cStartRow + C.idx_t(blockStart)
+		nullMapPtr := unsafe.Pointer(&vector.nullMap[blockStart])
 
-		// Extract non-null values based on column type
+		// Extract values based on column type using vector extraction functions
+		// These functions extract both values and nulls in a single CGO call
 		switch colType {
 		case C.DUCKDB_TYPE_BOOLEAN:
-			// Extract boolean values for this block
-			for i := 0; i < actualBlockSize; i++ {
-				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart+i)
-					val := C.duckdb_value_boolean(result, cColIdx, rowIdx)
-					vector.boolData[blockStart+i] = cBoolToGo(val)
-				}
+			if len(vector.boolData) > 0 {
+				// Use the native extraction function for boolean values
+				dataPtr := unsafe.Pointer(&vector.boolData[blockStart])
+				C.extract_vector_bool(result, cColIdx, blockStartRow, C.idx_t(actualBlockSize),
+					(*C.bool)(dataPtr), (*C.bool)(nullMapPtr))
 			}
 
 		case C.DUCKDB_TYPE_TINYINT:
-			// Extract int8 values for this block
-			for i := 0; i < actualBlockSize; i++ {
-				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart+i)
-					val := C.duckdb_value_int8(result, cColIdx, rowIdx)
-					vector.int8Data[blockStart+i] = int8(val)
-				}
+			if len(vector.int8Data) > 0 {
+				// Use the native extraction function for int8 values
+				dataPtr := unsafe.Pointer(&vector.int8Data[blockStart])
+				C.extract_vector_int8(result, cColIdx, blockStartRow, C.idx_t(actualBlockSize),
+					(*C.int8_t)(dataPtr), (*C.bool)(nullMapPtr))
 			}
 
 		case C.DUCKDB_TYPE_SMALLINT:
-			// Extract int16 values for this block
-			for i := 0; i < actualBlockSize; i++ {
-				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart+i)
-					val := C.duckdb_value_int16(result, cColIdx, rowIdx)
-					vector.int16Data[blockStart+i] = int16(val)
-				}
+			if len(vector.int16Data) > 0 {
+				// Use the native extraction function for int16 values
+				dataPtr := unsafe.Pointer(&vector.int16Data[blockStart])
+				C.extract_vector_int16(result, cColIdx, blockStartRow, C.idx_t(actualBlockSize),
+					(*C.int16_t)(dataPtr), (*C.bool)(nullMapPtr))
 			}
 
 		case C.DUCKDB_TYPE_INTEGER:
-			// Extract int32 values for this block
 			if len(vector.int32Data) > 0 {
-				for i := 0; i < actualBlockSize; i++ {
-					if !vector.nullMap[blockStart+i] {
-						rowIdx := cStartRow + C.idx_t(blockStart+i)
-						val := C.duckdb_value_int32(result, cColIdx, rowIdx)
-						vector.int32Data[blockStart+i] = int32(val)
-					}
-				}
+				// Use the native extraction function for int32 values
+				dataPtr := unsafe.Pointer(&vector.int32Data[blockStart])
+				C.extract_vector_int32(result, cColIdx, blockStartRow, C.idx_t(actualBlockSize),
+					(*C.int32_t)(dataPtr), (*C.bool)(nullMapPtr))
 			}
 
 		case C.DUCKDB_TYPE_BIGINT:
-			// Extract int64 values for this block
 			if len(vector.int64Data) > 0 {
-				for i := 0; i < actualBlockSize; i++ {
-					if !vector.nullMap[blockStart+i] {
-						rowIdx := cStartRow + C.idx_t(blockStart+i)
-						val := C.duckdb_value_int64(result, cColIdx, rowIdx)
-						vector.int64Data[blockStart+i] = int64(val)
-					}
-				}
+				// Use the native extraction function for int64 values
+				dataPtr := unsafe.Pointer(&vector.int64Data[blockStart])
+				C.extract_vector_int64(result, cColIdx, blockStartRow, C.idx_t(actualBlockSize),
+					(*C.int64_t)(dataPtr), (*C.bool)(nullMapPtr))
 			}
 
 		case C.DUCKDB_TYPE_FLOAT:
-			// Extract float32 values for this block
-			for i := 0; i < actualBlockSize; i++ {
-				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart+i)
-					val := C.duckdb_value_float(result, cColIdx, rowIdx)
-					vector.float32Data[blockStart+i] = float32(val)
-				}
+			if len(vector.float32Data) > 0 {
+				// Use the native extraction function for float32 values
+				dataPtr := unsafe.Pointer(&vector.float32Data[blockStart])
+				C.extract_vector_float32(result, cColIdx, blockStartRow, C.idx_t(actualBlockSize),
+					(*C.float)(dataPtr), (*C.bool)(nullMapPtr))
 			}
 
 		case C.DUCKDB_TYPE_DOUBLE:
-			// Extract float64 values for this block
-			for i := 0; i < actualBlockSize; i++ {
-				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart+i)
-					val := C.duckdb_value_double(result, cColIdx, rowIdx)
-					vector.float64Data[blockStart+i] = float64(val)
-				}
+			if len(vector.float64Data) > 0 {
+				// Use the native extraction function for float64 values
+				dataPtr := unsafe.Pointer(&vector.float64Data[blockStart])
+				C.extract_vector_float64(result, cColIdx, blockStartRow, C.idx_t(actualBlockSize),
+					(*C.double)(dataPtr), (*C.bool)(nullMapPtr))
 			}
 
 		case C.DUCKDB_TYPE_VARCHAR:
-			// Extract string values for this block
-			for i := 0; i < actualBlockSize; i++ {
-				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart+i)
-					cstr := C.duckdb_value_varchar(result, cColIdx, rowIdx)
-					if cstr != nil {
-						vector.stringData[blockStart+i] = C.GoString(cstr)
-						C.duckdb_free(unsafe.Pointer(cstr))
-					} else {
-						vector.stringData[blockStart+i] = ""
+			if len(vector.stringData) > 0 {
+				// Extract strings with batch processing
+				// First, allocate temporary arrays for efficient string extraction
+				valuesPtrs := make([]*C.char, actualBlockSize)
+				lengths := make([]C.idx_t, actualBlockSize)
+
+				// Call batch string extraction (single CGO crossing)
+				success := C.extract_vector_string(result, cColIdx, blockStartRow, C.idx_t(actualBlockSize),
+					(**C.char)(unsafe.Pointer(&valuesPtrs[0])), (*C.idx_t)(unsafe.Pointer(&lengths[0])),
+					(*C.bool)(nullMapPtr))
+
+				if success != 0 {
+					// Copy strings to Go slices and free C memory
+					for i := 0; i < actualBlockSize; i++ {
+						if valuesPtrs[i] != nil {
+							// Use GoStringN for more efficient string conversion with known length
+							vector.stringData[blockStart+i] = C.GoStringN(valuesPtrs[i], C.int(lengths[i]))
+							C.duckdb_free(unsafe.Pointer(valuesPtrs[i]))
+						} else {
+							vector.stringData[blockStart+i] = ""
+						}
 					}
 				}
 			}
 
 		case C.DUCKDB_TYPE_BLOB:
-			// Extract blob values for this block
-			for i := 0; i < actualBlockSize; i++ {
-				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart+i)
-					blob := C.duckdb_value_blob(result, cColIdx, rowIdx)
+			if len(vector.blobData) > 0 {
+				// Extract blobs with batch processing
+				// First, allocate temporary arrays for efficient blob extraction
+				valuesPtrs := make([]unsafe.Pointer, actualBlockSize)
+				lengths := make([]C.idx_t, actualBlockSize)
 
-					// Handle blob data safely to prevent memory leaks
-					if blob.data != nil {
-						// Store the pointer locally to avoid race conditions
-						blobData := blob.data
+				// Call batch blob extraction (single CGO crossing)
+				success := C.extract_vector_blob(result, cColIdx, blockStartRow, C.idx_t(actualBlockSize),
+					(**C.char)(unsafe.Pointer(&valuesPtrs[0])), (*C.idx_t)(unsafe.Pointer(&lengths[0])),
+					(*C.bool)(nullMapPtr))
 
-						if blob.size > 0 {
-							size := int(blob.size)
-							// Allocate a new buffer for this blob
-							buffer := make([]byte, size)
-							// Copy blob data safely
-							C.memcpy(unsafe.Pointer(&buffer[0]), unsafe.Pointer(blobData), C.size_t(size))
-							vector.blobData[blockStart+i] = buffer
+				if success != 0 {
+					// Create a shared byte pool for blobs of similar size to reduce allocations
+					// This pool could be further optimized with a proper size-based buffer pool
+					for i := 0; i < actualBlockSize; i++ {
+						if !vector.nullMap[blockStart+i] && valuesPtrs[i] != nil {
+							size := int(lengths[i])
+							if size > 0 {
+								// Allocate a new buffer for this blob
+								buffer := make([]byte, size)
+								// Copy blob data safely
+								C.memcpy(unsafe.Pointer(&buffer[0]), valuesPtrs[i], C.size_t(size))
+								vector.blobData[blockStart+i] = buffer
+							} else {
+								vector.blobData[blockStart+i] = []byte{}
+							}
+							// Free the C memory after safely copying it
+							C.duckdb_free(valuesPtrs[i])
 						} else {
 							vector.blobData[blockStart+i] = []byte{}
 						}
-
-						// Free the C memory after safely copying it
-						C.duckdb_free(blobData)
-					} else {
-						vector.blobData[blockStart+i] = []byte{}
 					}
 				}
 			}
@@ -298,26 +545,34 @@ func extractResultColumnBatch(result *C.duckdb_result, colIdx, startRow, batchSi
 		case C.DUCKDB_TYPE_TIMESTAMP, C.DUCKDB_TYPE_TIMESTAMP_S,
 			C.DUCKDB_TYPE_TIMESTAMP_MS, C.DUCKDB_TYPE_TIMESTAMP_NS,
 			C.DUCKDB_TYPE_TIMESTAMP_TZ:
-			// Extract timestamp values for this block
-			for i := 0; i < actualBlockSize; i++ {
-				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart+i)
-					val := C.duckdb_value_timestamp(result, cColIdx, rowIdx)
-					vector.timestampData[blockStart+i] = int64(val.micros)
-				}
+			if len(vector.timestampData) > 0 {
+				// Use the native extraction function for timestamp values
+				dataPtr := unsafe.Pointer(&vector.timestampData[blockStart])
+				C.extract_vector_timestamp(result, cColIdx, blockStartRow, C.idx_t(actualBlockSize),
+					(*C.int64_t)(dataPtr), (*C.bool)(nullMapPtr))
 			}
 
 		default:
-			// For other types, convert to string for now
-			for i := 0; i < actualBlockSize; i++ {
-				if !vector.nullMap[blockStart+i] {
-					rowIdx := cStartRow + C.idx_t(blockStart+i)
-					cstr := C.duckdb_value_varchar(result, cColIdx, rowIdx)
-					if cstr != nil {
-						vector.timeData[blockStart+i] = C.GoString(cstr)
-						C.duckdb_free(unsafe.Pointer(cstr))
-					} else {
-						vector.timeData[blockStart+i] = ""
+			// For unsupported types, we'll fall back to the string approach but with batching
+			if len(vector.timeData) > 0 {
+				// Extract strings with batch processing for other types
+				valuesPtrs := make([]*C.char, actualBlockSize)
+				lengths := make([]C.idx_t, actualBlockSize)
+
+				// Call batch string extraction (single CGO crossing)
+				success := C.extract_vector_string(result, cColIdx, blockStartRow, C.idx_t(actualBlockSize),
+					(**C.char)(unsafe.Pointer(&valuesPtrs[0])), (*C.idx_t)(unsafe.Pointer(&lengths[0])),
+					(*C.bool)(nullMapPtr))
+
+				if success != 0 {
+					// Copy strings to Go slices and free C memory
+					for i := 0; i < actualBlockSize; i++ {
+						if !vector.nullMap[blockStart+i] && valuesPtrs[i] != nil {
+							vector.timeData[blockStart+i] = C.GoStringN(valuesPtrs[i], C.int(lengths[i]))
+							C.duckdb_free(unsafe.Pointer(valuesPtrs[i]))
+						} else {
+							vector.timeData[blockStart+i] = ""
+						}
 					}
 				}
 			}

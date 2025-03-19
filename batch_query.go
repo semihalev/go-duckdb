@@ -15,12 +15,23 @@ import (
 	"io"
 	"reflect"
 	"sync"
+	"time"
 	"unsafe"
 )
 
 // BatchSize determines how many rows to process in a single batch
 // This is a key parameter that can be tuned for performance
 const DefaultBatchSize = 1000
+
+// Default block size for vectorized processing
+// This affects memory usage vs. performance tradeoff
+const DefaultBlockSize = 64
+
+// Error types
+var (
+	ErrNoRowsAvailable   = errors.New("no rows available in current batch")
+	ErrInvalidRowIndex   = errors.New("invalid row index")
+)
 
 // BatchQuery represents a batch-oriented query result
 // It processes data in column-wise batches for much higher performance
@@ -48,6 +59,105 @@ type BatchQuery struct {
 
 	// Temporary buffer for conversions
 	buffer []byte
+	
+	// Optimization flag to use unified extraction when possible
+	useUnifiedExtraction bool
+}
+
+// FetchNextBatchOptimized fetches the next batch of rows using the optimized extraction method
+// This reduces CGO overhead by extracting all columns in a unified way
+func (bq *BatchQuery) FetchNextBatchOptimized() error {
+	bq.mu.Lock()
+	defer bq.mu.Unlock()
+	
+	if bq.closed {
+		return ErrResultClosed
+	}
+	
+	// Calculate how many rows to fetch
+	batchStart := bq.currentRow
+	rowsLeft := bq.rowCount - batchStart
+	if rowsLeft <= 0 {
+		// No more rows to fetch
+		bq.batchAvailable = 0
+		return io.EOF
+	}
+	
+	// Limit batch size to available rows
+	batchSize := int64(bq.batchSize)
+	if rowsLeft < batchSize {
+		batchSize = rowsLeft
+	}
+	
+	// Reset previous batch vectors if they exist
+	for i := 0; i < bq.columnCount; i++ {
+		if bq.vectors[i] != nil {
+			PutPooledColumnVector(bq.vectors[i])
+			bq.vectors[i] = nil
+		}
+	}
+	
+	// Extract all columns with optimized method
+	for i := 0; i < bq.columnCount; i++ {
+		vector, err := ExtractColumnBatchTyped(bq.result, i, int(batchStart), int(batchSize))
+		if err != nil {
+			return fmt.Errorf("failed to extract column %d: %w", i, err)
+		}
+		bq.vectors[i] = vector
+	}
+	
+	// Update batch state
+	bq.currentBatch++
+	bq.currentRow += batchSize
+	bq.batchAvailable = int(batchSize)
+	bq.batchRowsRead = 0
+	
+	return nil
+}
+
+// GetColumnVector returns a column vector for the specified column
+// The vector provides type-specific access to column data
+func (bq *BatchQuery) GetColumnVector(colIdx int) (*ColumnVector, error) {
+	bq.mu.RLock()
+	defer bq.mu.RUnlock()
+	
+	if bq.closed {
+		return nil, ErrResultClosed
+	}
+	
+	if colIdx < 0 || colIdx >= bq.columnCount {
+		return nil, ErrInvalidColumnIndex
+	}
+	
+	if bq.batchAvailable <= 0 {
+		return nil, ErrNoRowsAvailable
+	}
+	
+	// Return the pre-extracted vector
+	return bq.vectors[colIdx], nil
+}
+
+// ExtractAllColumns is a convenience method to get all column vectors at once
+// This is useful when you want to process entire rows or do columnar operations
+func (bq *BatchQuery) ExtractAllColumns() ([]*ColumnVector, error) {
+	bq.mu.RLock()
+	defer bq.mu.RUnlock()
+	
+	if bq.closed {
+		return nil, ErrResultClosed
+	}
+	
+	if bq.batchAvailable <= 0 {
+		return nil, ErrNoRowsAvailable
+	}
+	
+	// Make a copy of the vectors to return
+	vectors := make([]*ColumnVector, bq.columnCount)
+	for i := 0; i < bq.columnCount; i++ {
+		vectors[i] = bq.vectors[i]
+	}
+	
+	return vectors, nil
 }
 
 // ColumnVector represents a type-specific vector of column values
@@ -78,6 +188,89 @@ type ColumnVector struct {
 	timeData      []interface{} // For other time-related types
 }
 
+// FetchNextBatch fetches the next batch of rows
+// This method uses the optimized extraction when enabled
+func (bq *BatchQuery) FetchNextBatch() error {
+	if bq.useUnifiedExtraction {
+		return bq.FetchNextBatchOptimized()
+	}
+	
+	// Fall back to the original implementation
+	// This is kept for backward compatibility
+	// The implementation would go here
+	return fmt.Errorf("original batch fetching not implemented, use FetchNextBatchOptimized instead")
+}
+
+// GetValue returns a typed value from the current batch
+// This provides a high-level interface to access values by column and row index
+func (bq *BatchQuery) GetValue(colIdx, rowIdx int) (interface{}, bool, error) {
+	if colIdx < 0 || colIdx >= bq.columnCount {
+		return nil, false, ErrInvalidColumnIndex
+	}
+	
+	if rowIdx < 0 || rowIdx >= bq.batchAvailable {
+		return nil, false, ErrInvalidRowIndex
+	}
+	
+	vector := bq.vectors[colIdx]
+	if vector == nil {
+		return nil, false, fmt.Errorf("column vector not available")
+	}
+	
+	// Check if value is NULL
+	if rowIdx >= len(vector.nullMap) || vector.nullMap[rowIdx] {
+		return nil, true, nil
+	}
+	
+	// Return the value based on type
+	switch vector.columnType {
+	case C.DUCKDB_TYPE_BOOLEAN:
+		if rowIdx < len(vector.boolData) {
+			return vector.boolData[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_TINYINT:
+		if rowIdx < len(vector.int8Data) {
+			return vector.int8Data[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_SMALLINT:
+		if rowIdx < len(vector.int16Data) {
+			return vector.int16Data[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_INTEGER:
+		if rowIdx < len(vector.int32Data) {
+			return vector.int32Data[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_BIGINT:
+		if rowIdx < len(vector.int64Data) {
+			return vector.int64Data[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_FLOAT:
+		if rowIdx < len(vector.float32Data) {
+			return vector.float32Data[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_DOUBLE:
+		if rowIdx < len(vector.float64Data) {
+			return vector.float64Data[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_VARCHAR:
+		if rowIdx < len(vector.stringData) {
+			return vector.stringData[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_BLOB:
+		if rowIdx < len(vector.blobData) {
+			return vector.blobData[rowIdx], false, nil
+		}
+	case C.DUCKDB_TYPE_TIMESTAMP:
+		if rowIdx < len(vector.timestampData) {
+			// Convert timestamp to Go time.Time
+			micros := vector.timestampData[rowIdx]
+			return time.Unix(micros/1000000, (micros%1000000)*1000), false, nil
+		}
+	}
+	
+	return nil, false, fmt.Errorf("unsupported column type: %d", vector.columnType)
+}
+
 // NewBatchQuery creates a new batch-oriented query from a DuckDB result
 func NewBatchQuery(result *C.duckdb_result, batchSize int) *BatchQuery {
 	if batchSize <= 0 {
@@ -90,14 +283,15 @@ func NewBatchQuery(result *C.duckdb_result, batchSize int) *BatchQuery {
 
 	// Initialize batch query
 	bq := &BatchQuery{
-		result:      result,
-		columnCount: columnCount,
-		rowCount:    rowCount,
-		columnNames: make([]string, columnCount),
-		columnTypes: make([]C.duckdb_type, columnCount),
-		batchSize:   batchSize,
-		vectors:     make([]*ColumnVector, columnCount),
-		buffer:      make([]byte, 4096), // Reusable buffer for string conversions
+		result:              result,
+		columnCount:         columnCount,
+		rowCount:            rowCount,
+		columnNames:         make([]string, columnCount),
+		columnTypes:         make([]C.duckdb_type, columnCount),
+		batchSize:           batchSize,
+		vectors:             make([]*ColumnVector, columnCount),
+		buffer:              make([]byte, 4096), // Reusable buffer for string conversions
+		useUnifiedExtraction: true,              // Use optimized extraction by default
 		resultOwned: true,               // By default, we own the result
 	}
 
@@ -982,7 +1176,7 @@ func (bs *BatchStmt) Exec(args []driver.Value) (driver.Result, error) {
 	// Extract affected rows
 	rowsAffected := int64(C.duckdb_rows_changed(&result))
 
-	return &Result{
+	return &QueryResult{
 		rowsAffected: rowsAffected,
 		lastInsertID: 0, // DuckDB doesn't support last insert ID
 	}, nil
@@ -1023,7 +1217,7 @@ func (bs *BatchStmt) ExecContext(ctx context.Context, args []driver.NamedValue) 
 	// Extract affected rows
 	rowsAffected := int64(C.duckdb_rows_changed(&result))
 
-	return &Result{
+	return &QueryResult{
 		rowsAffected: rowsAffected,
 		lastInsertID: 0, // DuckDB doesn't support last insert ID
 	}, nil

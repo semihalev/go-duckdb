@@ -58,7 +58,7 @@ func (conn *Connection) fastExecDirect(query string) (driver.Result, error) {
 	// Extract affected rows information
 	rowsAffected := int64(buffer.rows_affected)
 
-	return &Result{
+	return &QueryResult{
 		rowsAffected: rowsAffected,
 		lastInsertID: 0, // DuckDB doesn't support last insert ID
 	}, nil
@@ -254,7 +254,7 @@ func (stmt *FastStmt) ExecContext(ctx context.Context, args []driver.Value) (dri
 	// Extract affected rows information
 	rowsAffected := int64(buffer.rows_affected)
 
-	return &Result{
+	return &QueryResult{
 		rowsAffected: rowsAffected,
 		lastInsertID: 0, // DuckDB doesn't support last insert ID
 	}, nil
@@ -381,7 +381,7 @@ func (stmt *FastStmt) ExecuteWithResult(args ...driver.Value) (driver.Result, er
 	// Extract affected rows information
 	rowsAffected := int64(buffer.rows_affected)
 
-	return &Result{
+	return &QueryResult{
 		rowsAffected: rowsAffected,
 		lastInsertID: 0, // DuckDB doesn't support last insert ID
 	}, nil

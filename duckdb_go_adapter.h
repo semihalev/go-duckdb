@@ -6,7 +6,112 @@
 #define DUCKDB_GO_ADAPTER_H
 
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include "include/duckdb.h"
+
+// Parameter type constants for internal use
+typedef enum {
+    PARAM_NULL = 0,
+    PARAM_BOOL = 1,
+    PARAM_INT8 = 2,
+    PARAM_INT16 = 3,
+    PARAM_INT32 = 4,
+    PARAM_INT64 = 5,
+    PARAM_UINT8 = 6,
+    PARAM_UINT16 = 7,
+    PARAM_UINT32 = 8,
+    PARAM_UINT64 = 9,
+    PARAM_FLOAT = 10,
+    PARAM_DOUBLE = 11,
+    PARAM_STRING = 12,
+    PARAM_BLOB = 13,
+    PARAM_TIMESTAMP = 14
+} param_type_t;
+
+// DuckDB Constants for compatibility
+#ifndef DUCKDB_TYPE_COMMON
+#define duckdb_success 0
+#endif
+
+// Forward declarations
+struct temporal_data_t;
+
+// Column metadata structure
+typedef struct {
+    char* name;
+    int32_t _type;     // Using _type to avoid conflict with C++ keyword
+    int32_t physical_type;
+    int32_t nullable;
+} column_meta_t;
+
+// Buffer metadata structure
+typedef struct {
+    int64_t row_count;
+    int32_t column_count;
+    int64_t error_code;
+    char* error_message;
+    column_meta_t* columns;
+    
+    // Pointers to column data
+    void** data_ptrs;
+    int8_t** nulls_ptrs;
+    
+    // Keep track of string data for cleanup
+    char* string_buffer;
+    int64_t string_buffer_size;
+    
+    // For tracking affected rows in DML statements
+    int64_t rows_affected;
+    
+    // Temporal data storage (date/timestamp)
+    struct temporal_data_t* temporal_data;
+    
+    // For memory cleanup
+    void** resources;
+    int32_t resource_count;
+    
+    // Reference counting for shared buffer management
+    int ref_count;
+} result_buffer_t;
+
+// Parameter batch data structure for efficient batch binding
+typedef struct {
+    int32_t param_count;     // Number of parameters
+    int32_t batch_size;      // Number of parameter sets in the batch
+    
+    // Flag arrays for NULL values (param_count * batch_size)
+    int8_t* null_flags;
+    
+    // Parameter type information
+    int32_t* param_types;    // Array of parameter types
+    
+    // Data arrays for each type (pointers to param data for each type)
+    int8_t* bool_data;       // For BOOLEAN
+    int8_t* int8_data;       // For TINYINT
+    int16_t* int16_data;     // For SMALLINT
+    int32_t* int32_data;     // For INTEGER
+    int64_t* int64_data;     // For BIGINT
+    uint8_t* uint8_data;     // For UTINYINT
+    uint16_t* uint16_data;   // For USMALLINT
+    uint32_t* uint32_data;   // For UINTEGER
+    uint64_t* uint64_data;   // For UBIGINT
+    float* float_data;       // For FLOAT
+    double* double_data;     // For DOUBLE
+    
+    // Variable-length data (string and blob)
+    char** string_data;      // Array of string pointers
+    void** blob_data;        // Array of blob data pointers
+    int64_t* blob_lengths;   // Array of blob lengths
+    
+    // Timestamp data
+    int64_t* timestamp_data; // For TIMESTAMP (microseconds)
+    
+    // Resources for cleanup
+    void** resources;        // Pointers to allocated resources
+    int32_t resource_count;  // Count of resources
+    int32_t resource_capacity; // Capacity of resources array
+} param_batch_t;
 
 // String cache structure for efficient string handling
 typedef struct {
@@ -17,13 +122,32 @@ typedef struct {
     int32_t* ref_counts;    // Reference counting for entries
 } string_cache_t;
 
-// Column metadata structure
-typedef struct {
-    char* name;
-    int32_t _type;     // Using _type to avoid conflict with C++ keyword
-    int32_t physical_type;
-    int32_t nullable;
-} column_meta_t;
+// Temporal data structure for date/timestamp handling
+typedef struct temporal_data_t {
+    // Date data (seconds since epoch for each date value)
+    int64_t* date_data;
+    
+    // Timestamp data (seconds and nanoseconds parts for each timestamp value)
+    int64_t* timestamp_seconds;
+    int32_t* timestamp_nanos;
+    
+    // Flags to indicate whether these arrays were allocated
+    int8_t has_date_data;
+    int8_t has_timestamp_data;
+} temporal_data_t;
+
+// Helper functions for DuckDB prepared statements (not in standard API)
+const char* duckdb_prepare_error_message(duckdb_prepared_statement prepared_statement);
+duckdb_prepared_statement* duckdb_prepared_statement_unsafe_ptr(duckdb_prepared_statement prepared_statement);
+
+// Parameter batch functions 
+param_batch_t* create_param_batch(int32_t param_count, int32_t batch_size);
+void free_param_batch(param_batch_t* batch);
+int ensure_param_batch_resource_capacity(param_batch_t* batch);
+int bind_and_execute_batch(duckdb_prepared_statement statement, param_batch_t* params, result_buffer_t* buffer);
+
+// Structure size - needed for memory allocation
+#define sizeof_result_buffer_t sizeof(result_buffer_t)
 
 // Vector extraction functions for efficient batch processing
 // These functions extract an entire column of values with a single call
@@ -91,88 +215,6 @@ void extract_vector_timestamp(duckdb_result *result, idx_t col_idx, idx_t offset
 void extract_vector_date(duckdb_result *result, idx_t col_idx, idx_t offset, 
                         idx_t batch_size, int32_t *values, bool *nulls);
 
-// Temporal data structure for date/timestamp handling
-typedef struct {
-    // Date data (seconds since epoch for each date value)
-    int64_t* date_data;
-    
-    // Timestamp data (seconds and nanoseconds parts for each timestamp value)
-    int64_t* timestamp_seconds;
-    int32_t* timestamp_nanos;
-    
-    // Flags to indicate whether these arrays were allocated
-    int8_t has_date_data;
-    int8_t has_timestamp_data;
-} temporal_data_t;
-
-// Buffer metadata structure
-typedef struct {
-    int64_t row_count;
-    int32_t column_count;
-    int64_t error_code;
-    char* error_message;
-    column_meta_t* columns;
-    
-    // Pointers to column data
-    void** data_ptrs;
-    int8_t** nulls_ptrs;
-    
-    // Keep track of string data for cleanup
-    char* string_buffer;
-    int64_t string_buffer_size;
-    
-    // For tracking affected rows in DML statements
-    int64_t rows_affected;
-    
-    // Temporal data storage (date/timestamp)
-    temporal_data_t* temporal_data;
-    
-    // For memory cleanup
-    void** resources;
-    int32_t resource_count;
-    
-    // Reference counting for shared buffer management
-    int ref_count;
-} result_buffer_t;
-
-// Parameter batch data structure for efficient batch binding
-typedef struct {
-    int32_t param_count;     // Number of parameters
-    int32_t batch_size;      // Number of parameter sets in the batch
-    
-    // Flag arrays for NULL values (param_count * batch_size)
-    int8_t* null_flags;
-    
-    // Parameter type information
-    int32_t* param_types;    // Array of parameter types
-    
-    // Data arrays for each type (pointers to param data for each type)
-    int8_t* bool_data;       // For BOOLEAN
-    int8_t* int8_data;       // For TINYINT
-    int16_t* int16_data;     // For SMALLINT
-    int32_t* int32_data;     // For INTEGER
-    int64_t* int64_data;     // For BIGINT
-    uint8_t* uint8_data;     // For UTINYINT
-    uint16_t* uint16_data;   // For USMALLINT
-    uint32_t* uint32_data;   // For UINTEGER
-    uint64_t* uint64_data;   // For UBIGINT
-    float* float_data;       // For FLOAT
-    double* double_data;     // For DOUBLE
-    
-    // Variable-length data (string and blob)
-    char** string_data;      // Array of string pointers
-    void** blob_data;        // Array of blob data pointers
-    int64_t* blob_lengths;   // Array of blob lengths
-    
-    // Timestamp data
-    int64_t* timestamp_data; // For TIMESTAMP (microseconds)
-    
-    // Resources for cleanup
-    void** resources;        // Pointers to allocated resources
-    int32_t resource_count;  // Count of resources
-    int32_t resource_capacity; // Capacity of resources array
-} param_batch_t;
-
 // Execute a query and store the entire result set in a single operation
 int execute_query_vectorized(duckdb_connection connection, const char* query, result_buffer_t* buffer);
 
@@ -183,18 +225,6 @@ int execute_query_vectorized_shim(duckdb_connection connection, const char* quer
 // Parameters are bound directly to the statement before calling this function
 int execute_prepared_vectorized(duckdb_prepared_statement statement, 
                                result_buffer_t* buffer);
-
-// Batch bind parameters to a prepared statement and execute it
-// This reduces the number of CGO crossings for multiple parameter sets
-int bind_and_execute_batch(duckdb_prepared_statement statement, 
-                          param_batch_t* params,
-                          result_buffer_t* buffer);
-
-// Initialize a parameter batch structure
-param_batch_t* create_param_batch(int32_t param_count, int32_t batch_size);
-
-// Free all resources associated with a parameter batch
-void free_param_batch(param_batch_t* params);
 
 // Clean up all resources associated with a result buffer
 void free_result_buffer(result_buffer_t* buffer);
