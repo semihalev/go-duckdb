@@ -170,7 +170,7 @@ The driver offers several high-performance features:
 1. Zero Allocation Design - Minimizes GC pressure and memory overhead
 2. Dual API Support - Standard database/sql interface and low-level direct API
 3. Advanced Optimizations:
-  - SIMD acceleration with AVX2 and ARM64 NEON
+  - Vectorized batch operations
   - Zero-copy column extraction
   - Tiered buffer pools
   - String caching and deduplication

@@ -8,7 +8,7 @@ import (
 
 // ColumnarResult provides a columnar data structure for analytics and data science workloads.
 // Instead of row-by-row access, it extracts all data at once in a column-oriented format,
-// which is much more efficient for analytical processing, especially with SIMD operations.
+// which is much more efficient for analytical processing, especially with vector operations.
 type ColumnarResult struct {
 	// Basic metadata
 	RowCount    int

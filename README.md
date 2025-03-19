@@ -20,7 +20,7 @@ A high-performance Go driver for DuckDB with both standard SQL and low-level API
   - Standard database/sql interface
   - Low-level direct API for maximum performance
 - **Advanced Optimizations**:
-  - SIMD acceleration with AVX2 and ARM64 NEON
+  - Vectorized batch operations
   - Zero-copy column extraction
   - Tiered buffer pools
   - String caching and deduplication
@@ -527,7 +527,6 @@ Run the benchmarks with: `go test -bench=. -benchmem`
 This driver incorporates several advanced optimizations:
 
 - **Zero-Copy Architecture**: Direct memory access minimizes data copying
-- **SIMD Acceleration**: AVX2 and ARM64 NEON optimizations for numeric operations
 - **Column-Wise Processing**: Extract and process entire columns at once
 - **String Deduplication**: Cross-query string interning reduces allocations
 - **Buffer Pooling**: Reuse memory buffers to minimize GC pressure
