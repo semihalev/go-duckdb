@@ -20,7 +20,7 @@
 vendor/
 build/
 benchmark-comparison/
-wiki/
+go-duckdb.wiki/
 
 # IDE files
 .idea/

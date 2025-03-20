@@ -9,6 +9,7 @@ import "C"
 
 import (
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -51,10 +52,10 @@ type StringCache struct {
 	// Global string map usage flag
 	useSharedStringMap bool
 
-	// Statistics for monitoring
-	hits   int
-	misses int
-	cHits  int // C string cache hits
+	// Statistics for monitoring - using atomic operations for thread safety
+	hits   int64
+	misses int64
+	cHits  int64 // C string cache hits
 }
 
 // NewStringCache creates a new optimized string cache with improved performance.
@@ -72,6 +73,9 @@ func NewStringCache(columns int) *StringCache {
 
 // Get returns a cached string for the column value, optimized for speed
 func (sc *StringCache) Get(colIdx int, value string) string {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
 	// Ensure we have space in the column values
 	if colIdx >= len(sc.columnValues) {
 		newValues := make([]string, colIdx+1)
@@ -90,7 +94,7 @@ func (sc *StringCache) Get(colIdx int, value string) string {
 		// Check the local map first - this is the hottest path
 		if cached, ok := sc.internMap[value]; ok {
 			sc.columnValues[colIdx] = cached
-			sc.hits++
+			atomic.AddInt64(&sc.hits, 1)
 			return cached
 		}
 
@@ -102,14 +106,14 @@ func (sc *StringCache) Get(colIdx int, value string) string {
 			sc.internMap[value] = result
 
 			sc.columnValues[colIdx] = result
-			sc.misses++
+			atomic.AddInt64(&sc.misses, 1)
 			return result
 		}
 
 		// For non-shared mode, store in local map
 		sc.internMap[value] = value
 		sc.columnValues[colIdx] = value
-		sc.misses++
+		atomic.AddInt64(&sc.misses, 1)
 		return value
 	}
 
@@ -119,19 +123,22 @@ func (sc *StringCache) Get(colIdx int, value string) string {
 		if sc.useSharedStringMap {
 			result := globalBufferPool.GetSharedString(value)
 			sc.columnValues[colIdx] = result
-			sc.misses++
+			atomic.AddInt64(&sc.misses, 1)
 			return result
 		}
 	}
 
 	// For large strings, no interning to avoid memory bloat
 	sc.columnValues[colIdx] = value
-	sc.misses++
+	atomic.AddInt64(&sc.misses, 1)
 	return value
 }
 
 // GetFromBytes converts a byte slice to a string with optimized performance
 func (sc *StringCache) GetFromBytes(colIdx int, bytes []byte) string {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
 	// Ensure we have space in the column values
 	if colIdx >= len(sc.columnValues) {
 		newValues := make([]string, colIdx+1)
@@ -153,7 +160,7 @@ func (sc *StringCache) GetFromBytes(colIdx int, bytes []byte) string {
 		// Check the local map first
 		if cached, ok := sc.internMap[s]; ok {
 			sc.columnValues[colIdx] = cached
-			sc.hits++
+			atomic.AddInt64(&sc.hits, 1)
 			return cached
 		}
 
@@ -165,14 +172,14 @@ func (sc *StringCache) GetFromBytes(colIdx int, bytes []byte) string {
 			sc.internMap[s] = result
 
 			sc.columnValues[colIdx] = result
-			sc.misses++
+			atomic.AddInt64(&sc.misses, 1)
 			return result
 		}
 
 		// For non-shared mode, store in local map
 		sc.internMap[s] = s
 		sc.columnValues[colIdx] = s
-		sc.misses++
+		atomic.AddInt64(&sc.misses, 1)
 		return s
 	}
 
@@ -184,40 +191,34 @@ func (sc *StringCache) GetFromBytes(colIdx int, bytes []byte) string {
 		if sc.useSharedStringMap {
 			result := globalBufferPool.GetSharedString(s)
 			sc.columnValues[colIdx] = result
-			sc.misses++
+			atomic.AddInt64(&sc.misses, 1)
 			return result
 		}
 
 		// Otherwise just use the string directly
 		sc.columnValues[colIdx] = s
-		sc.misses++
+		atomic.AddInt64(&sc.misses, 1)
 		return s
 	}
 
 	// For large strings, just convert without caching
 	s := string(bytes)
 	sc.columnValues[colIdx] = s
-	sc.misses++
+	atomic.AddInt64(&sc.misses, 1)
 	return s
 }
 
 // GetFromCString efficiently converts a C string to a Go string
 // Thread-safe implementation with proper locking to prevent race conditions
 func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t) string {
-	// This function handles all thread safety concerns properly by ensuring:
-	// 1. Locks are acquired and released consistently
-	// 2. No data races when accessing shared maps
-	// 3. Lock is released on all return paths
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
 
-	// Ensure we have space in the column values (no lock needed for len)
+	// Ensure we have space in the column values
 	if colIdx >= len(sc.columnValues) {
-		sc.mu.Lock()                        // Lock for column values expansion
-		if colIdx >= len(sc.columnValues) { // Double-check after locking
-			newValues := make([]string, colIdx+1)
-			copy(newValues, sc.columnValues)
-			sc.columnValues = newValues
-		}
-		sc.mu.Unlock()
+		newValues := make([]string, colIdx+1)
+		copy(newValues, sc.columnValues)
+		sc.columnValues = newValues
 	}
 
 	// Fast path for nil or empty strings (no lock needed)
@@ -240,7 +241,7 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 	if cached, ok := sc.cStringMap[cstrAddr]; ok {
 		// Cached result found - update stats and release lock
 		sc.columnValues[colIdx] = cached
-		sc.cHits++
+		atomic.AddInt64(&sc.cHits, 1)
 		sc.mu.Unlock()
 		return cached
 	}
@@ -286,7 +287,7 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 		if cached, ok := sc.internMap[s]; ok {
 			sc.cStringMap[cstrAddr] = cached // Cache C string pointer too
 			sc.columnValues[colIdx] = cached
-			sc.hits++
+			atomic.AddInt64(&sc.hits, 1)
 			sc.mu.Unlock()
 			return cached
 		}
@@ -301,7 +302,7 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 			sc.internMap[s] = result
 			sc.cStringMap[cstrAddr] = result
 			sc.columnValues[colIdx] = result
-			sc.misses++
+			atomic.AddInt64(&sc.misses, 1)
 			sc.mu.Unlock()
 			return result
 		}
@@ -310,7 +311,7 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 		sc.internMap[s] = s
 		sc.cStringMap[cstrAddr] = s
 		sc.columnValues[colIdx] = s
-		sc.misses++
+		atomic.AddInt64(&sc.misses, 1)
 		sc.mu.Unlock()
 		return s
 	}
@@ -325,7 +326,7 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 		sc.mu.Unlock()
 
 		sc.columnValues[colIdx] = result
-		sc.misses++
+		atomic.AddInt64(&sc.misses, 1)
 		return result
 	}
 
@@ -336,7 +337,7 @@ func (sc *StringCache) GetFromCString(colIdx int, cstr *C.char, length C.size_t)
 	sc.mu.Unlock()
 
 	sc.columnValues[colIdx] = s
-	sc.misses++
+	atomic.AddInt64(&sc.misses, 1)
 	return s
 }
 
@@ -353,16 +354,18 @@ func (sc *StringCache) Reset() {
 		sc.cStringMap = make(map[uintptr]string, 2048)
 
 		// Reset stats
-		sc.hits = 0
-		sc.misses = 0
-		sc.cHits = 0
+		atomic.StoreInt64(&sc.hits, 0)
+		atomic.StoreInt64(&sc.misses, 0)
+		atomic.StoreInt64(&sc.cHits, 0)
 	}
 	sc.mu.Unlock()
 }
 
 // Stats returns cache hit/miss statistics
 func (sc *StringCache) Stats() (hits, misses, cHits int) {
-	return sc.hits, sc.misses, sc.cHits
+	return int(atomic.LoadInt64(&sc.hits)),
+		int(atomic.LoadInt64(&sc.misses)),
+		int(atomic.LoadInt64(&sc.cHits))
 }
 
 // GetDedupString returns a deduplicated string from the cache
@@ -377,7 +380,7 @@ func (sc *StringCache) GetDedupString(value string) string {
 	if len(value) < sc.smallStringThreshold {
 		// Check the local map first - this is the hottest path
 		if cached, ok := sc.internMap[value]; ok {
-			sc.hits++
+			atomic.AddInt64(&sc.hits, 1)
 			return cached
 		}
 
@@ -388,13 +391,13 @@ func (sc *StringCache) GetDedupString(value string) string {
 			// Cache locally too for future hits
 			sc.internMap[value] = result
 
-			sc.misses++
+			atomic.AddInt64(&sc.misses, 1)
 			return result
 		}
 
 		// For non-shared mode, store in local map
 		sc.internMap[value] = value
-		sc.misses++
+		atomic.AddInt64(&sc.misses, 1)
 		return value
 	}
 
@@ -403,12 +406,12 @@ func (sc *StringCache) GetDedupString(value string) string {
 		// Only use shared map for medium strings
 		if sc.useSharedStringMap {
 			result := globalBufferPool.GetSharedString(value)
-			sc.misses++
+			atomic.AddInt64(&sc.misses, 1)
 			return result
 		}
 	}
 
 	// For large strings, no interning to avoid memory bloat
-	sc.misses++
+	atomic.AddInt64(&sc.misses, 1)
 	return value
 }
